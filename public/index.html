@@ -116,8 +116,10 @@
       var ctx = canvas.getContext('2d');
       var glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノﾊﾋﾌﾍﾎ0123456789'.split('');
       var fontSize = 14;
+      var lineHeight = Math.round(fontSize * 1.8); // vertical gap so glyphs don't overlap
+      var speed = 6;                               // px the head falls per frame
       var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      var w = 0, h = 0, cols = 0, drops = [];
+      var w = 0, h = 0, cols = 0, drops = [], cells = [], chars = [], whites = [];
 
       function size() {
         w = window.innerWidth;
@@ -128,8 +130,8 @@
         canvas.style.height = h + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         cols = Math.ceil(w / fontSize) + 1;
-        drops = [];
-        for (var i = 0; i < cols; i++) drops[i] = Math.random() * -60;
+        drops = []; cells = []; chars = []; whites = [];
+        for (var i = 0; i < cols; i++) { drops[i] = Math.random() * -h; cells[i] = -1; chars[i] = ' '; whites[i] = false; }
         ctx.font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
         ctx.textBaseline = 'top';
       }
@@ -138,13 +140,21 @@
         ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
         ctx.fillRect(0, 0, w, h);
         for (var i = 0; i < cols; i++) {
-          var ch = glyphs[(Math.random() * glyphs.length) | 0];
-          var x = i * fontSize;
-          var y = drops[i] * fontSize;
-          ctx.fillStyle = Math.random() < 0.09 ? '#e3fff0' : 'rgba(0, 255, 102, 0.92)';
-          if (y > 0) ctx.fillText(ch, x, y);
-          if (y > h && Math.random() > 0.975) drops[i] = Math.random() * -20;
-          drops[i] += 0.5;
+          // advance the head smoothly, but only stamp a new glyph when it enters a
+          // fresh cell — keeps each character spaced out instead of smeared together
+          var cell = Math.floor(drops[i] / lineHeight);
+          if (cell !== cells[i]) {
+            cells[i] = cell;
+            chars[i] = glyphs[(Math.random() * glyphs.length) | 0];
+            whites[i] = Math.random() < 0.12;
+          }
+          var y = cell * lineHeight;
+          if (y >= 0 && y < h) {
+            ctx.fillStyle = whites[i] ? '#e3fff0' : 'rgba(0, 255, 102, 0.92)';
+            ctx.fillText(chars[i], i * fontSize, y);
+          }
+          drops[i] += speed;
+          if (drops[i] > h && Math.random() > 0.975) { drops[i] = Math.random() * -h * 0.4; cells[i] = -1; }
         }
       }
 
