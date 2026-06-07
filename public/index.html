@@ -116,7 +116,7 @@
       var ctx = canvas.getContext('2d');
       var glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノﾊﾋﾌﾍﾎ0123456789'.split('');
       var fontSize = 14;
-      var lineHeight = Math.round(fontSize * 1.8); // vertical gap so glyphs don't overlap
+      var lineHeight = Math.round(fontSize * 1.6); // vertical gap so glyphs don't overlap
       var speed = 6;                               // px the head falls per frame
       var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
       var w = 0, h = 0, cols = 0, drops = [], cells = [], chars = [], whites = [];
@@ -162,7 +162,7 @@
       function loop(now) {
         rafId = requestAnimationFrame(loop);
         if (document.hidden) return;
-        if (now - last < 45) return; // ~22fps, gentle
+        if (now - last < 25) return; // ~40fps, gentle
         last = now;
         draw();
       }
