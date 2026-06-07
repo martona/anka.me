@@ -158,13 +158,32 @@
         }
       }
 
-      var last = 0;
+      var rafId = null, last = 0, shown = false, stopTimer;
       function loop(now) {
-        requestAnimationFrame(loop);
+        rafId = requestAnimationFrame(loop);
         if (document.hidden) return;
         if (now - last < 45) return; // ~22fps, gentle
         last = now;
         draw();
+      }
+
+      // Run only while the pointer is on the page. Fade in on enter; on leave, fade
+      // out and then stop the loop entirely so it uses no CPU.
+      function show() {
+        if (shown) return;
+        shown = true;
+        clearTimeout(stopTimer);
+        canvas.classList.add('is-on');
+        if (rafId === null) { last = 0; rafId = requestAnimationFrame(loop); }
+      }
+      function hide() {
+        if (!shown) return;
+        shown = false;
+        canvas.classList.remove('is-on');
+        clearTimeout(stopTimer);
+        stopTimer = setTimeout(function () {
+          if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+        }, 820); // just past the 0.75s fade-out
       }
 
       var resizeTimer;
@@ -173,8 +192,14 @@
         resizeTimer = setTimeout(size, 150);
       });
 
+      var root = document.documentElement;
+      root.addEventListener('mouseenter', show);
+      root.addEventListener('mouseleave', hide);
+      window.addEventListener('mousemove', show, { once: true }); // pointer already inside at load
+
       size();
-      requestAnimationFrame(loop);
+      // No hover (touch devices) means no pointer to follow — just run it.
+      if (!(window.matchMedia && window.matchMedia('(hover: hover)').matches)) show();
     })();
 
     // ---- copy-to-clipboard buttons ----
