@@ -450,6 +450,12 @@ Set-ItemProperty -Path $advExplorer -Name 'ShowSyncProviderNotifications' -Value
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name 'ShowRecent'   -Value 0 -Type DWord -Force
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name 'ShowFrequent' -Value 0 -Type DWord -Force
 
+Step 'Disabling Windows tips & suggestions ("you have unused printers", finish setup, etc.)'
+# DisableSoftLanding is the GPO "Do not show Windows tips" - the authoritative kill for the
+# contextual suggestion toasts (the per-user SubscribedContent toggles are zeroed elsewhere).
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' 'DisableSoftLanding' 1
+Set-Reg $cdmPath 'SubscribedContent-310093Enabled' 0
+
 # ===========================================================================
 Section 'Tidying the taskbar & Start menu'
 # ===========================================================================
