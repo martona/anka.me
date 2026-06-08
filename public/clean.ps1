@@ -27,6 +27,17 @@ function New-FolderForced {
     }
 }
 
+# Set a registry value, creating the key first if needed. Never throws: some values
+# are ACL-locked by Windows (e.g. TaskbarDa), so we note it and carry on.
+function Set-Reg ($Path, $Name, $Value, $Type = 'DWord') {
+    try {
+        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
+        Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force -ErrorAction Stop
+    } catch {
+        Warn "skipped $Name (locked by Windows or access denied)"
+    }
+}
+
 # This script writes all over HKLM, so it needs elevation.
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -274,6 +285,18 @@ foreach ($key in $cdm) {
     Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' $key 0
 }
 
+Step 'Removing the Win32 Copilot stub (if present)'
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+    # winget returns the uninstaller's own (often non-zero) exit code; we don't care.
+    winget uninstall --name 'Copilot' --silent --accept-source-agreements 2>&1 | Out-Null
+} else {
+    # Fallback: drive the ARP UninstallString directly.
+    Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                     'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object DisplayName -match 'Copilot' |
+        ForEach-Object { if ($_.UninstallString) { cmd /c $_.UninstallString 2>&1 | Out-Null } }
+}
+
 Step 'Stopping the Store from auto-downloading apps'
 New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore'
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore' 'AutoDownload' 2
@@ -433,23 +456,30 @@ Section 'Tidying the taskbar & Start menu'
 
 $advTaskbar = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 
-Step 'Removing Widgets, Chat, and Task View from the taskbar'
-Set-ItemProperty -Path $advTaskbar -Name 'TaskbarDa'          -Value 0 -Type DWord -Force   # Widgets
-Set-ItemProperty -Path $advTaskbar -Name 'TaskbarMn'          -Value 0 -Type DWord -Force   # Chat
-Set-ItemProperty -Path $advTaskbar -Name 'ShowTaskViewButton' -Value 0 -Type DWord -Force   # Task View
+Step 'Disabling Widgets'
+# Recent Windows 11 ACL-locks the per-user TaskbarDa value (you can't even create it
+# in regedit), so the machine policy is what actually sticks. The HKCU write is a
+# best-effort extra and is skipped automatically if locked.
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0
+Set-Reg $advTaskbar 'TaskbarDa' 0
+
+Step 'Disabling the Chat / Teams icon'
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat' 'ChatIcon' 3
+Set-Reg $advTaskbar 'TaskbarMn' 0
+
+Step 'Removing the Task View button'
+Set-Reg $advTaskbar 'ShowTaskViewButton' 0
 
 Step 'Left-aligning the taskbar'
-Set-ItemProperty -Path $advTaskbar -Name 'TaskbarAl' -Value 0 -Type DWord -Force
+Set-Reg $advTaskbar 'TaskbarAl' 0
 
 Step 'Collapsing the taskbar search box to an icon'
-New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Value 1 -Type DWord -Force
+Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'SearchboxTaskbarMode' 1
 
 Step 'Disabling Start menu recommendations and recently added'
-Set-ItemProperty -Path $advTaskbar -Name 'Start_TrackDocs'           -Value 0 -Type DWord -Force   # recently opened items
-Set-ItemProperty -Path $advTaskbar -Name 'Start_IrisRecommendations' -Value 0 -Type DWord -Force   # tips / recommendations
-New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' -Name 'HideRecommendedSection' -Value 1 -Type DWord -Force
+Set-Reg $advTaskbar 'Start_TrackDocs' 0            # recently opened items
+Set-Reg $advTaskbar 'Start_IrisRecommendations' 0  # tips / recommendations
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 1
 
 # ===========================================================================
 Section 'Restarting Explorer'
