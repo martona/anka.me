@@ -327,6 +327,131 @@ Step 'Removing the OneDrive scheduled task'
 Get-ScheduledTask -TaskPath '\' -TaskName 'OneDrive*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
 
 # ===========================================================================
+Section 'Hardening privacy & telemetry'
+# ===========================================================================
+
+Step 'Setting the telemetry level to the minimum'
+# On Pro/Home this floors at 1 (Required); 0 (Security) fully applies only on Enterprise/Education.
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Value 0 -Type DWord -Force
+New-FolderForced -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection' -Name 'AllowTelemetry' -Value 0 -Type DWord -Force
+
+Step 'Disabling the telemetry services (DiagTrack, dmwappushservice)'
+foreach ($svc in 'DiagTrack', 'dmwappushservice') {
+    Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+    Set-Service  -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+}
+
+Step 'Disabling the telemetry / CEIP scheduled tasks'
+$telemetryTasks = @(
+    'Microsoft Compatibility Appraiser'
+    'ProgramDataUpdater'
+    'Consolidator'
+    'UsbCeip'
+    'DmClient'
+    'DmClientOnScenarioDownload'
+    'Proxy'
+    'QueueReporting'
+)
+foreach ($t in $telemetryTasks) {
+    Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+}
+
+Step 'Turning off the advertising ID'
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' -Name 'Enabled' -Value 0 -Type DWord -Force
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' -Name 'DisabledByGroupPolicy' -Value 1 -Type DWord -Force
+
+Step 'Turning off tailored experiences'
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy' -Name 'TailoredExperiencesWithDiagnosticDataEnabled' -Value 0 -Type DWord -Force
+
+Step 'Disabling activity history / Timeline'
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name 'EnableActivityFeed'    -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name 'PublishUserActivities' -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name 'UploadUserActivities'  -Value 0 -Type DWord -Force
+
+Step 'Silencing feedback requests and error reporting'
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Siuf\Rules'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Siuf\Rules' -Name 'NumberOfSIUFInPeriod' -Value 0 -Type DWord -Force
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting' -Name 'Disabled' -Value 1 -Type DWord -Force
+
+# ===========================================================================
+Section 'Disabling search, Copilot & Recall'
+# ===========================================================================
+
+Step 'Disabling Bing / web results in Start search'
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name 'AllowCortana'          -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name 'DisableWebSearch'      -Value 1 -Type DWord -Force
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name 'ConnectedSearchUseWeb' -Value 0 -Type DWord -Force
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'BingSearchEnabled' -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'CortanaConsent'    -Value 0 -Type DWord -Force
+
+Step 'Turning off Windows Copilot'
+New-FolderForced -Path 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'
+Set-ItemProperty -Path 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' -Name 'TurnOffWindowsCopilot' -Value 1 -Type DWord -Force
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' -Name 'TurnOffWindowsCopilot' -Value 1 -Type DWord -Force
+
+Step 'Turning off Recall (AI data analysis)'
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name 'DisableAIDataAnalysis' -Value 1 -Type DWord -Force
+New-FolderForced -Path 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'
+Set-ItemProperty -Path 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' -Name 'DisableAIDataAnalysis' -Value 1 -Type DWord -Force
+
+# ===========================================================================
+Section 'Killing ad & nag surfaces'
+# ===========================================================================
+
+$cdmPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+
+Step 'Disabling lock-screen Spotlight ads and tips'
+New-FolderForced -Path $cdmPath
+Set-ItemProperty -Path $cdmPath -Name 'RotatingLockScreenOverlayEnabled' -Value 0 -Type DWord -Force
+Set-ItemProperty -Path $cdmPath -Name 'SoftLandingEnabled'               -Value 0 -Type DWord -Force
+# (The SubscribedContent-* ad keys are already zeroed in the default-apps section.)
+
+Step 'Disabling the "finish setting up your device" nag'
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' -Name 'ScoobeSystemSettingEnabled' -Value 0 -Type DWord -Force
+
+Step 'Removing ads and clutter from File Explorer'
+$advExplorer = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+Set-ItemProperty -Path $advExplorer -Name 'ShowSyncProviderNotifications' -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name 'ShowRecent'   -Value 0 -Type DWord -Force
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name 'ShowFrequent' -Value 0 -Type DWord -Force
+
+# ===========================================================================
+Section 'Tidying the taskbar & Start menu'
+# ===========================================================================
+
+$advTaskbar = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+Step 'Removing Widgets, Chat, and Task View from the taskbar'
+Set-ItemProperty -Path $advTaskbar -Name 'TaskbarDa'          -Value 0 -Type DWord -Force   # Widgets
+Set-ItemProperty -Path $advTaskbar -Name 'TaskbarMn'          -Value 0 -Type DWord -Force   # Chat
+Set-ItemProperty -Path $advTaskbar -Name 'ShowTaskViewButton' -Value 0 -Type DWord -Force   # Task View
+
+Step 'Left-aligning the taskbar'
+Set-ItemProperty -Path $advTaskbar -Name 'TaskbarAl' -Value 0 -Type DWord -Force
+
+Step 'Collapsing the taskbar search box to an icon'
+New-FolderForced -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Value 1 -Type DWord -Force
+
+Step 'Disabling Start menu recommendations and recently added'
+Set-ItemProperty -Path $advTaskbar -Name 'Start_TrackDocs'           -Value 0 -Type DWord -Force   # recently opened items
+Set-ItemProperty -Path $advTaskbar -Name 'Start_IrisRecommendations' -Value 0 -Type DWord -Force   # tips / recommendations
+New-FolderForced -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' -Name 'HideRecommendedSection' -Value 1 -Type DWord -Force
+
+# ===========================================================================
 Section 'Restarting Explorer'
 # ===========================================================================
 
