@@ -17,6 +17,7 @@
 </head>
 <body>
   <canvas class="rain" id="rain" aria-hidden="true"></canvas>
+  <div class="shader-credit" hidden>Shader by <a href="https://x.com/XorDev" target="_blank" rel="noopener noreferrer">@XorDev</a></div>
 
   <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -192,69 +193,147 @@
   </main>
 
   <script>
-    // ---- matrix rain (still frame - rendered once, zero CPU) ----
+    // ---- background: a WebGL shader on real GPUs, else a still matrix frame ----
     (function () {
       var canvas = document.getElementById('rain');
       if (!canvas || !canvas.getContext) return;
 
-      var ctx = canvas.getContext('2d');
-      var glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノﾊﾋﾌﾍﾎ0123456789'.split('');
-      var fontSize = 14;
-      var lineHeight = Math.round(fontSize * 1.6); // vertical gap so glyphs don't overlap
+      var root = document.documentElement;
       var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      var hover = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
 
-      // One still frame that looks like the rain paused mid-fall. The animation
-      // faded the canvas 6% per frame while heads advanced ~3.7 frames per cell,
-      // so a trail glyph k cells above the head sat at ~0.8^k brightness - we
-      // just draw that falloff directly. No warm-up loop, no rAF, no CPU.
-      function render() {
-        var w = window.innerWidth;
-        var h = window.innerHeight;
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-        canvas.style.width = w + 'px';
-        canvas.style.height = h + 'px';
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        ctx.font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
-        ctx.textBaseline = 'top';
-
-        var cols = Math.ceil(w / fontSize) + 1;
-        var cells = Math.ceil(h / lineHeight);
-        var tail = 14;
-        for (var i = 0; i < cols; i++) {
-          // heads land anywhere, a little above and below the viewport too, so
-          // columns read as entering, mid-fall, or exiting - like a real pause
-          var head = ((Math.random() * (cells + tail + 4)) | 0) - 4;
-          var alpha = 0.92;
-          for (var k = 0; k <= tail && alpha > 0.04; k++) {
-            var cell = head - k;
-            if (cell >= 0 && cell < cells) {
-              ctx.fillStyle = (Math.random() < 0.08 ? 'rgba(227, 255, 240, ' : 'rgba(0, 255, 102, ') + alpha.toFixed(3) + ')';
-              ctx.fillText(glyphs[(Math.random() * glyphs.length) | 0], i * fontSize, cell * lineHeight);
-            }
-            alpha *= 0.8;
+      // Only run the shader on a hardware GPU with a pointer (its fade/stop rules
+      // need one, and it spares phones a heavy always-on raymarch). failIfMajor-
+      // PerformanceCaveat returns no context on a software rasterizer; the
+      // renderer string catches the stragglers (SwiftShader / llvmpipe / Basic
+      // Render). Probe on a throwaway canvas so #rain isn't locked to a context
+      // we might not use.
+      function hardwareWebGL() {
+        try {
+          var c = document.createElement('canvas');
+          var g = c.getContext('webgl2', { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' });
+          if (!g) return false;
+          var soft = false, dbg = g.getExtension('WEBGL_debug_renderer_info');
+          if (dbg) {
+            var rnd = (g.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '').toLowerCase();
+            soft = /swiftshader|llvmpipe|softpipe|software|basic render/.test(rnd);
           }
-        }
+          var lose = g.getExtension('WEBGL_lose_context');
+          if (lose) lose.loseContext();
+          return !soft;
+        } catch (e) { return false; }
       }
 
-      var resizeTimer;
-      window.addEventListener('resize', function () {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(render, 150);
-      });
+      if (!(hover && hardwareWebGL() && startShader())) startMatrixStill();
 
-      // The pointer fade stays: visible while the mouse is on the page, fades out
-      // when it leaves. Pure CSS opacity transition - costs nothing either way.
-      function show() { canvas.classList.add('is-on'); }
-      var root = document.documentElement;
-      root.addEventListener('mouseenter', show);
-      root.addEventListener('mouseleave', function () { canvas.classList.remove('is-on'); });
-      window.addEventListener('mousemove', show, { once: true }); // pointer already inside at load
-      // No hover (touch devices) means no pointer to follow — just show it.
-      if (!(window.matchMedia && window.matchMedia('(hover: hover)').matches)) show();
+      // ===== "Vectors" by @XorDev - a raymarched WebGL shader (animated) =====
+      function startShader() {
+        var gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
+        if (!gl) return false;
 
-      render();
+        var VERT =
+          '#version 300 es\nprecision highp float;\n' +
+          'const vec2 v[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));\n' +
+          'void main(){gl_Position=vec4(v[gl_VertexID],0,1);}';
+        var FRAG =
+          '#version 300 es\nprecision highp float;\nuniform vec2 r;uniform float t;out vec4 o;\n' +
+          '#define FC gl_FragCoord\nvoid main(){o=vec4(0.);\n' +
+          'for(float i,z,d;i++<7e1;o+=vec4(9,i,z,1)/d){vec3 p=z*normalize(FC.rgb*2.-r.xyy),a=normalize(sin(t/4.+vec3(0,2,4))),v;p.z+=7.;v=a=dot(a,p)*a+cross(a,p);' +
+          'for(d=2.;d++<9.;a+=sin(ceil(a*d)-t).yzx/d);z+=d=.1*length(sin(a*a))*sqrt(length(v*sin(v.yzx)));}' +
+          'o=tanh(o/6e4);\n}';
+
+        function compile(type, src) {
+          var s = gl.createShader(type);
+          gl.shaderSource(s, src); gl.compileShader(s);
+          if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { gl.deleteShader(s); return null; }
+          return s;
+        }
+        var vs = compile(gl.VERTEX_SHADER, VERT), fs = compile(gl.FRAGMENT_SHADER, FRAG);
+        if (!vs || !fs) return false;
+        var prog = gl.createProgram();
+        gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return false;
+        gl.useProgram(prog);
+        gl.bindVertexArray(gl.createVertexArray());
+        var uR = gl.getUniformLocation(prog, 'r'), uT = gl.getUniformLocation(prog, 't');
+
+        var SCALE = 0.6; // render below native - it's a dim backdrop; saves the GPU/battery
+        function size() {
+          var w = Math.max(1, Math.floor(window.innerWidth * SCALE));
+          var h = Math.max(1, Math.floor(window.innerHeight * SCALE));
+          canvas.width = w; canvas.height = h;
+          canvas.style.width = window.innerWidth + 'px';
+          canvas.style.height = window.innerHeight + 'px';
+          gl.viewport(0, 0, w, h);
+        }
+        size();
+
+        var rafId = null, last = 0, shown = false, stopTimer = null;
+        function loop(now) {
+          rafId = requestAnimationFrame(loop);
+          if (document.hidden) return;
+          if (now - last < 33) return; // ~30fps is plenty for a backdrop
+          last = now;
+          gl.uniform2f(uR, canvas.width, canvas.height);
+          gl.uniform1f(uT, now * 0.0001);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        // Same fade/stop rules as the rain: animate while the pointer is on the
+        // page; on leave, fade out then cancel the loop so it costs nothing idle.
+        function show() { if (shown) return; shown = true; clearTimeout(stopTimer); canvas.classList.add('is-on'); if (rafId === null) { last = 0; rafId = requestAnimationFrame(loop); } }
+        function hide() { if (!shown) return; shown = false; canvas.classList.remove('is-on'); clearTimeout(stopTimer); stopTimer = setTimeout(function () { if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; } }, 820); }
+
+        var resizeTimer;
+        window.addEventListener('resize', function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(size, 150); });
+        root.addEventListener('mouseenter', show);
+        root.addEventListener('mouseleave', hide);
+        window.addEventListener('mousemove', show, { once: true }); // pointer already inside at load
+
+        var credit = document.querySelector('.shader-credit');
+        if (credit) credit.hidden = false;
+        return true;
+      }
+
+      // ===== fallback: the still matrix frame (no GPU / software WebGL / touch) =====
+      function startMatrixStill() {
+        var ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        var glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノﾊﾋﾌﾍﾎ0123456789'.split('');
+        var fontSize = 14, lineHeight = Math.round(fontSize * 1.6);
+
+        // One still frame that looks like the rain paused mid-fall: per column a
+        // random head, then a tail decaying x0.8 per cell. No loop, no rAF, no CPU.
+        function render() {
+          var w = window.innerWidth, h = window.innerHeight;
+          canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
+          canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, w, h);
+          ctx.font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
+          ctx.textBaseline = 'top';
+          var cols = Math.ceil(w / fontSize) + 1, cells = Math.ceil(h / lineHeight), tail = 14;
+          for (var i = 0; i < cols; i++) {
+            var head = ((Math.random() * (cells + tail + 4)) | 0) - 4, alpha = 0.92;
+            for (var k = 0; k <= tail && alpha > 0.04; k++) {
+              var cell = head - k;
+              if (cell >= 0 && cell < cells) {
+                ctx.fillStyle = (Math.random() < 0.08 ? 'rgba(227, 255, 240, ' : 'rgba(0, 255, 102, ') + alpha.toFixed(3) + ')';
+                ctx.fillText(glyphs[(Math.random() * glyphs.length) | 0], i * fontSize, cell * lineHeight);
+              }
+              alpha *= 0.8;
+            }
+          }
+        }
+
+        var resizeTimer;
+        window.addEventListener('resize', function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+        function show() { canvas.classList.add('is-on'); }
+        root.addEventListener('mouseenter', show);
+        root.addEventListener('mouseleave', function () { canvas.classList.remove('is-on'); });
+        window.addEventListener('mousemove', show, { once: true });
+        if (!hover) show(); // touch devices: no pointer to follow
+        render();
+      }
     })();
 
     // ---- copy-to-clipboard buttons ----
