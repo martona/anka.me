@@ -164,6 +164,22 @@
             </button>
           </div>
         </article>
+
+        <article class="script">
+          <div class="script-head">
+            <svg class="os-ic" aria-hidden="true" focusable="false"><use href="#i-windows"></use></svg>
+            <span class="script-name">install my apps</span>
+            <span class="os-tag">Windows</span>
+            <a class="view" href="https://anka.me/install.ps1">install.ps1<svg class="ic-ext" aria-hidden="true" focusable="false"><use href="#i-ext"></use></svg></a>
+          </div>
+          <div class="cmd-box">
+            <code class="cmd-text"><span class="cmd-prompt">&gt;</span> irm https://anka.me/install.ps1 | iex</code>
+            <button type="button" class="cmd-copy" data-copy="irm https://anka.me/install.ps1 | iex" aria-label="Copy command">
+              <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
+              <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
+            </button>
+          </div>
+        </article>
       </section>
 
       <footer class="foot">
@@ -176,7 +192,7 @@
   </main>
 
   <script>
-    // ---- matrix rain (subtle, behind the terminal) ----
+    // ---- matrix rain (still frame - rendered once, zero CPU) ----
     (function () {
       var canvas = document.getElementById('rain');
       if (!canvas || !canvas.getContext) return;
@@ -185,89 +201,60 @@
       var glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノﾊﾋﾌﾍﾎ0123456789'.split('');
       var fontSize = 14;
       var lineHeight = Math.round(fontSize * 1.6); // vertical gap so glyphs don't overlap
-      var speed = 6;                               // px the head falls per frame
       var dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      var w = 0, h = 0, cols = 0, drops = [], cells = [], chars = [], whites = [];
 
-      function size() {
-        w = window.innerWidth;
-        h = window.innerHeight;
+      // One still frame that looks like the rain paused mid-fall. The animation
+      // faded the canvas 6% per frame while heads advanced ~3.7 frames per cell,
+      // so a trail glyph k cells above the head sat at ~0.8^k brightness - we
+      // just draw that falloff directly. No warm-up loop, no rAF, no CPU.
+      function render() {
+        var w = window.innerWidth;
+        var h = window.innerHeight;
         canvas.width = Math.floor(w * dpr);
         canvas.height = Math.floor(h * dpr);
         canvas.style.width = w + 'px';
         canvas.style.height = h + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        cols = Math.ceil(w / fontSize) + 1;
-        drops = []; cells = []; chars = []; whites = [];
-        for (var i = 0; i < cols; i++) { drops[i] = Math.random() * -h; cells[i] = -1; chars[i] = ' '; whites[i] = false; }
+        ctx.clearRect(0, 0, w, h);
         ctx.font = fontSize + 'px ' + getComputedStyle(document.body).fontFamily;
         ctx.textBaseline = 'top';
-      }
 
-      function draw() {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
-        ctx.fillRect(0, 0, w, h);
+        var cols = Math.ceil(w / fontSize) + 1;
+        var cells = Math.ceil(h / lineHeight);
+        var tail = 14;
         for (var i = 0; i < cols; i++) {
-          // advance the head smoothly, but only stamp a new glyph when it enters a
-          // fresh cell — keeps each character spaced out instead of smeared together
-          var cell = Math.floor(drops[i] / lineHeight);
-          if (cell !== cells[i]) {
-            cells[i] = cell;
-            chars[i] = glyphs[(Math.random() * glyphs.length) | 0];
-            whites[i] = Math.random() < 0.12;
+          // heads land anywhere, a little above and below the viewport too, so
+          // columns read as entering, mid-fall, or exiting - like a real pause
+          var head = ((Math.random() * (cells + tail + 4)) | 0) - 4;
+          var alpha = 0.92;
+          for (var k = 0; k <= tail && alpha > 0.04; k++) {
+            var cell = head - k;
+            if (cell >= 0 && cell < cells) {
+              ctx.fillStyle = (Math.random() < 0.08 ? 'rgba(227, 255, 240, ' : 'rgba(0, 255, 102, ') + alpha.toFixed(3) + ')';
+              ctx.fillText(glyphs[(Math.random() * glyphs.length) | 0], i * fontSize, cell * lineHeight);
+            }
+            alpha *= 0.8;
           }
-          var y = cell * lineHeight;
-          if (y >= 0 && y < h) {
-            ctx.fillStyle = whites[i] ? '#e3fff0' : 'rgba(0, 255, 102, 0.92)';
-            ctx.fillText(chars[i], i * fontSize, y);
-          }
-          drops[i] += speed;
-          if (drops[i] > h && Math.random() > 0.975) { drops[i] = Math.random() * -h * 0.4; cells[i] = -1; }
         }
-      }
-
-      var rafId = null, last = 0, shown = false, stopTimer;
-      function loop(now) {
-        rafId = requestAnimationFrame(loop);
-        if (document.hidden) return;
-        if (now - last < 25) return; // ~40fps, gentle
-        last = now;
-        draw();
-      }
-
-      // Run only while the pointer is on the page. Fade in on enter; on leave, fade
-      // out and then stop the loop entirely so it uses no CPU.
-      function show() {
-        if (shown) return;
-        shown = true;
-        clearTimeout(stopTimer);
-        canvas.classList.add('is-on');
-        if (rafId === null) { last = 0; rafId = requestAnimationFrame(loop); }
-      }
-      function hide() {
-        if (!shown) return;
-        shown = false;
-        canvas.classList.remove('is-on');
-        clearTimeout(stopTimer);
-        stopTimer = setTimeout(function () {
-          if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
-        }, 820); // just past the 0.75s fade-out
       }
 
       var resizeTimer;
       window.addEventListener('resize', function () {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(size, 150);
+        resizeTimer = setTimeout(render, 150);
       });
 
+      // The pointer fade stays: visible while the mouse is on the page, fades out
+      // when it leaves. Pure CSS opacity transition - costs nothing either way.
+      function show() { canvas.classList.add('is-on'); }
       var root = document.documentElement;
       root.addEventListener('mouseenter', show);
-      root.addEventListener('mouseleave', hide);
+      root.addEventListener('mouseleave', function () { canvas.classList.remove('is-on'); });
       window.addEventListener('mousemove', show, { once: true }); // pointer already inside at load
-
-      size();
-      // No hover (touch devices) means no pointer to follow — just run it.
+      // No hover (touch devices) means no pointer to follow — just show it.
       if (!(window.matchMedia && window.matchMedia('(hover: hover)').matches)) show();
+
+      render();
     })();
 
     // ---- copy-to-clipboard buttons ----
