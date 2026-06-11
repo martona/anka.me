@@ -56,6 +56,18 @@
                 <a class="chip" href="https://clipp.net/">
                   clipp.net<svg class="ic-ext" aria-hidden="true" focusable="false"><use href="#i-ext"></use></svg>
                 </a>
+                <span class="mini-installs" role="group" aria-label="Copy quick-install commands">
+                  <button type="button" class="mini-install" data-copy="curl -fsSL https://clipp.net/install.sh | sudo bash" aria-label="Copy Linux install command" title="curl -fsSL https://clipp.net/install.sh | sudo bash">
+                    <svg class="os-glyph" aria-hidden="true" focusable="false"><use href="#i-linux"></use></svg>.sh
+                    <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
+                    <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
+                  </button>
+                  <button type="button" class="mini-install" data-copy="irm https://clipp.net/install.ps1 | iex" aria-label="Copy Windows install command" title="irm https://clipp.net/install.ps1 | iex">
+                    <svg class="os-glyph" aria-hidden="true" focusable="false"><use href="#i-windows"></use></svg>.ps1
+                    <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
+                    <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
+                  </button>
+                </span>
               </div>
             </div>
           </li>
@@ -88,38 +100,6 @@
 
       <section class="block" aria-labelledby="scripts-h">
         <h2 class="block-h" id="scripts-h"><span class="prompt">$</span> ls ~/scripts</h2>
-
-        <article class="script">
-          <div class="script-head">
-            <svg class="os-ic" aria-hidden="true" focusable="false"><use href="#i-linux"></use></svg>
-            <span class="script-name">clipp installer</span>
-            <span class="os-tag">Linux</span>
-            <a class="view" href="https://clipp.net/install.sh">install.sh<svg class="ic-ext" aria-hidden="true" focusable="false"><use href="#i-ext"></use></svg></a>
-          </div>
-          <div class="cmd-box">
-            <code class="cmd-text"><span class="cmd-prompt">$</span> curl -fsSL https://clipp.net/install.sh | sudo bash</code>
-            <button type="button" class="cmd-copy" data-copy="curl -fsSL https://clipp.net/install.sh | sudo bash" aria-label="Copy command">
-              <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
-              <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
-            </button>
-          </div>
-        </article>
-
-        <article class="script">
-          <div class="script-head">
-            <svg class="os-ic" aria-hidden="true" focusable="false"><use href="#i-windows"></use></svg>
-            <span class="script-name">clipp installer</span>
-            <span class="os-tag">Windows</span>
-            <a class="view" href="https://clipp.net/install.ps1">install.ps1<svg class="ic-ext" aria-hidden="true" focusable="false"><use href="#i-ext"></use></svg></a>
-          </div>
-          <div class="cmd-box">
-            <code class="cmd-text"><span class="cmd-prompt">&gt;</span> irm https://clipp.net/install.ps1 | iex</code>
-            <button type="button" class="cmd-copy" data-copy="irm https://clipp.net/install.ps1 | iex" aria-label="Copy command">
-              <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
-              <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
-            </button>
-          </div>
-        </article>
 
         <article class="script">
           <div class="script-head">
@@ -292,7 +272,7 @@
 
     // ---- copy-to-clipboard buttons ----
     (function () {
-      var btns = [].slice.call(document.querySelectorAll('.cmd-copy'));
+      var btns = [].slice.call(document.querySelectorAll('[data-copy]'));
       if (!btns.length) return;
 
       function copyText(text) {
@@ -318,12 +298,13 @@
       btns.forEach(function (btn) {
         btn.addEventListener('click', function () {
           copyText(btn.getAttribute('data-copy') || '').then(function () {
+            if (!btn._label) btn._label = btn.getAttribute('aria-label') || 'Copy command';
             btn.classList.add('is-copied');
             btn.setAttribute('aria-label', 'Copied');
             clearTimeout(btn._t);
             btn._t = setTimeout(function () {
               btn.classList.remove('is-copied');
-              btn.setAttribute('aria-label', 'Copy command');
+              btn.setAttribute('aria-label', btn._label);
             }, 1600);
           }).catch(function () {});
         });
