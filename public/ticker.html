@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Starting...</title>
+<script>
+  const workerCode = `
+    const SYMBOL = 'SPCX'; 
+    const API_KEY = 'd8m4dkpr01qkiso5gv30d8m4dkpr01qkiso5gv3g'; 
+    const API_URL = \`https://finnhub.io/api/v1/quote?symbol=\${SYMBOL}&token=\${API_KEY}\`;
+
+    // Updates every 10 seconds (10000ms) to avoid hitting free API rate limits
+    setInterval(async () => {
+      try {
+        const response = await fetch(API_URL);
+        const data = await response.json();
+        
+        // Finnhub returns current price as 'c' and percent change as 'dp'
+        if (data.c !== undefined && data.c !== 0) {
+            const price = data.c.toFixed(2);
+            const direction = data.dp >= 0 ? '▲' : '▼';
+            const percent = Math.abs(data.dp).toFixed(2);
+            
+            postMessage(\`\${SYMBOL} \$\${price} \${direction} \${percent}%\`);
+        } else {
+            postMessage('Check API Key/Symbol');
+        }
+      } catch (err) {
+        postMessage('Network Error');
+      }
+    }, 10000); 
+  `;
+
+  // Spin up the worker from a Blob so it remains a single file
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const worker = new Worker(URL.createObjectURL(blob));
+
+  // The main thread receives the data and updates the titlebar
+  worker.onmessage = (e) => {
+    document.title = e.data;
+  };
+</script>
+</head>
+<body></body>
+</html>
