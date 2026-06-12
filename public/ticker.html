@@ -204,7 +204,7 @@
         document.title = title;
         setFavicon(up);
         priceEl.textContent = '$' + price;
-        changeEl.textContent = arrow + ' ' + pct;
+        changeEl.textContent = pct;
         changeEl.className = 'change ' + (up ? 'up' : 'down');
         titlePrevEl.textContent = title;
         updatedEl.textContent = new Date().toLocaleTimeString();
