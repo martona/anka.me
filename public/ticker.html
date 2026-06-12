@@ -62,6 +62,19 @@
   .examples { display: flex; flex-wrap: wrap; gap: 6px; }
   .ex { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; transition: color 0.14s ease, border-color 0.14s ease; }
   .ex:hover { color: var(--green); border-color: var(--line-bright); }
+  .lookup { position: relative; }
+  .results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+    margin: 0; padding: 4px; list-style: none; max-height: 216px; overflow-y: auto;
+    background: #050b06; border: 1px solid var(--line-bright); border-radius: 7px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.65); scrollbar-width: thin;
+  }
+  .results li { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 7px 9px; border-radius: 5px; cursor: pointer; }
+  .results li:hover, .results li.active { background: rgba(0, 255, 102, 0.1); }
+  .r-sym { color: var(--green-soft); font-weight: 700; font-size: 0.9rem; flex: none; }
+  .r-desc { color: var(--muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .results li.r-empty { display: block; cursor: default; color: var(--muted); font-size: 0.78rem; }
+  .results li.r-empty:hover { background: none; }
   .row { display: flex; gap: 12px; }
   .row label { flex: 1; }
   .btn {
@@ -104,7 +117,10 @@
           </div>
           <label><span id="symLabel">symbol</span>
             <div class="examples" id="examples"></div>
-            <input id="symbol" placeholder="TSLA" autocapitalize="characters" autocomplete="off" spellcheck="false" required>
+            <div class="lookup">
+              <input id="symbol" placeholder="TSLA" autocapitalize="characters" autocomplete="off" spellcheck="false" required>
+              <ul id="results" class="results" role="listbox" hidden></ul>
+            </div>
           </label>
           <label id="keyField">finnhub api key
             <input id="key" type="password" placeholder="your finnhub token" autocomplete="off" spellcheck="false">
@@ -297,6 +313,7 @@
           b.addEventListener('click', function () { symEl.value = s; symEl.focus(); });
           ex.appendChild(b);
         });
+        hideResults();
       }
 
       function showSetup(cfg) {
@@ -349,6 +366,65 @@
         if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done, function(){});
         else { var t = document.createElement('textarea'); t.value = location.href; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e2) {} document.body.removeChild(t); }
       });
+
+      // --- finnhub symbol lookup (stock mode) ---
+      var resultsEl = $('results'), lookupResults = [], activeIdx = -1, searchTimer = null;
+
+      function hideResults() { if (!resultsEl) return; resultsEl.hidden = true; resultsEl.innerHTML = ''; lookupResults = []; activeIdx = -1; }
+      function lookupMessage(msg) { resultsEl.innerHTML = '<li class="r-empty"></li>'; resultsEl.firstChild.textContent = msg; resultsEl.hidden = false; lookupResults = []; activeIdx = -1; }
+      function renderResults(list) {
+        lookupResults = list; activeIdx = -1;
+        if (!list.length) { lookupMessage('no matches'); return; }
+        resultsEl.innerHTML = '';
+        list.forEach(function (r, idx) {
+          var li = document.createElement('li');
+          var sym = document.createElement('span'); sym.className = 'r-sym'; sym.textContent = r.displaySymbol || r.symbol;
+          var desc = document.createElement('span'); desc.className = 'r-desc'; desc.textContent = r.description || '';
+          li.appendChild(sym); li.appendChild(desc);
+          li.addEventListener('mousedown', function (e) { e.preventDefault(); pick(idx); });   // beat the input's blur
+          resultsEl.appendChild(li);
+        });
+        resultsEl.hidden = false;
+      }
+      function pick(idx) { var r = lookupResults[idx]; if (!r) return; symEl.value = r.symbol; hideResults(); symEl.focus(); }
+      function moveActive(d) {
+        if (!lookupResults.length) return;
+        activeIdx = (activeIdx + d + lookupResults.length) % lookupResults.length;
+        [].forEach.call(resultsEl.children, function (li, i) { li.className = (i === activeIdx ? 'active' : ''); });
+        var act = resultsEl.children[activeIdx]; if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+      }
+      function doSearch() {
+        var mode = (document.querySelector('input[name="mode"]:checked') || {}).value || 'stock';
+        if (mode !== 'stock') { hideResults(); return; }
+        var q = symEl.value.trim();
+        if (!q) { hideResults(); return; }
+        var key = keyEl.value.trim();
+        if (!key) { lookupMessage('enter your finnhub key below to search'); return; }
+        var url = 'https://finnhub.io/api/v1/search?q=' + encodeURIComponent(q) + '&token=' + encodeURIComponent(key);
+        fetch(url).then(function (r) {
+          if (r.status === 401 || r.status === 403) return { _err: 'invalid api key' };
+          if (r.status === 429) return { _err: 'rate limited' };
+          if (!r.ok) return { _err: 'lookup failed' };
+          return r.json();
+        }).then(function (d) {
+          if (!d) { lookupMessage('lookup failed'); return; }
+          if (d._err) { lookupMessage(d._err); return; }
+          var seen = {}, list = [];
+          (d.result || []).forEach(function (r) { if (r.symbol && !seen[r.symbol]) { seen[r.symbol] = 1; list.push(r); } });
+          renderResults(list.slice(0, 10));
+        }).catch(function () { lookupMessage('network error'); });
+      }
+
+      symEl.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 300); });
+      symEl.addEventListener('keydown', function (e) {
+        if (resultsEl.hidden) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
+        else if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); pick(activeIdx); }
+        else if (e.key === 'Escape') { hideResults(); }
+      });
+      symEl.addEventListener('blur', function () { setTimeout(hideResults, 150); });
+      keyEl.addEventListener('change', function () { if (symEl.value.trim()) doSearch(); });
 
       window.addEventListener('hashchange', init);
       init();
