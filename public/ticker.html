@@ -1,45 +1,281 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Starting...</title>
-<script>
-  const workerCode = `
-    const SYMBOL = 'SPCX'; 
-    const API_KEY = 'd8m4dkpr01qkiso5gv30d8m4dkpr01qkiso5gv3g'; 
-    const API_URL = \`https://finnhub.io/api/v1/quote?symbol=\${SYMBOL}&token=\${API_KEY}\`;
-
-    // Updates every 10 seconds (10000ms) to avoid hitting free API rate limits
-    setInterval(async () => {
-      try {
-        const response = await fetch(API_URL);
-        const data = await response.json();
-        
-        // Finnhub returns current price as 'c' and percent change as 'dp'
-        if (data.c !== undefined && data.c !== 0) {
-            const price = data.c.toFixed(2);
-            const direction = data.dp >= 0 ? '▲' : '▼';
-            const percent = Math.abs(data.dp).toFixed(2);
-            
-            postMessage(\`\${SYMBOL} \$\${price} \${direction} \${percent}%\`);
-        } else {
-            postMessage('Check API Key/Symbol');
-        }
-      } catch (err) {
-        postMessage('Network Error');
-      }
-    }, 10000); 
-  `;
-
-  // Spin up the worker from a Blob so it remains a single file
-  const blob = new Blob([workerCode], { type: 'application/javascript' });
-  const worker = new Worker(URL.createObjectURL(blob));
-
-  // The main thread receives the data and updates the titlebar
-  worker.onmessage = (e) => {
-    document.title = e.data;
-  };
-</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>ticker</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #000;
+    --panel: rgba(0, 0, 0, 0.72);
+    --green: #00ff66;
+    --green-soft: #5fffa0;
+    --green-dim: #1f9e54;
+    --text: #c6f7d3;
+    --muted: #5c8c6a;
+    --line: rgba(0, 255, 102, 0.16);
+    --line-bright: rgba(0, 255, 102, 0.36);
+    --red: #ff5b5b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px; background: var(--bg); color: var(--text);
+    font-family: var(--mono); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--green-soft); text-decoration: none; }
+  a:hover { color: var(--green); }
+  .term {
+    width: 100%; max-width: 440px; border: 1px solid var(--line-bright); border-radius: 10px;
+    background: var(--panel); box-shadow: 0 0 24px rgba(0, 255, 102, 0.1), 0 24px 70px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); background: rgba(0, 20, 8, 0.6);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--green-dim); }
+  .dot:first-child { background: var(--green-dim); }
+  .term-title { flex: 1; text-align: center; margin-right: 33px; color: var(--muted); font-size: 0.82rem; }
+  .term-body { padding: 24px; }
+  .prompt { color: var(--green); font-weight: 700; }
+  .cmd-line { margin: 0 0 14px; font-size: 0.9rem; word-break: break-word; }
+  .name { margin: 0 0 8px; font-size: 1.7rem; line-height: 1.05; color: var(--green-soft); text-shadow: 0 0 18px rgba(0, 255, 102, 0.28); }
+  .tagline { margin: 0 0 22px; color: var(--muted); font-size: 0.92rem; }
+  .form { display: flex; flex-direction: column; gap: 14px; }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 0.78rem; color: var(--muted); letter-spacing: 0.03em; }
+  input {
+    font-family: var(--mono); font-size: 0.95rem; color: var(--text); background: rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--line-bright); border-radius: 7px; padding: 10px 12px; outline: none; width: 100%;
+  }
+  input:focus { border-color: var(--green); }
+  .row { display: flex; gap: 12px; }
+  .row label { flex: 1; }
+  .btn {
+    font-family: var(--mono); font-weight: 700; font-size: 0.95rem; color: #02100a; background: var(--green-soft);
+    border: none; border-radius: 7px; padding: 11px 16px; cursor: pointer; transition: background 0.14s ease;
+  }
+  .btn:hover { background: var(--green); }
+  .btn-ghost { color: var(--green-soft); background: transparent; border: 1px solid var(--line-bright); }
+  .btn-ghost:hover { background: rgba(0, 255, 102, 0.08); color: var(--green); }
+  .hint { margin: 2px 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+  code { background: rgba(0, 255, 102, 0.08); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  .quote { display: flex; align-items: baseline; gap: 14px; margin: 4px 0; flex-wrap: wrap; }
+  .price { font-size: 2.6rem; font-weight: 700; color: var(--green-soft); }
+  .change { font-size: 1.05rem; font-weight: 700; color: var(--muted); }
+  .change.up { color: #00e676; }
+  .change.down { color: var(--red); }
+  .meta { margin: 10px 0 0; color: var(--muted); font-size: 0.8rem; word-break: break-word; }
+  .meta.err { color: var(--red); }
+  .actions { margin-top: 22px; display: flex; gap: 10px; }
+  [hidden] { display: none !important; }
+</style>
 </head>
-<body></body>
+<body>
+  <main class="term">
+    <div class="term-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="term-title">ticker</span>
+    </div>
+    <div class="term-body">
+
+      <!-- ===== setup ===== -->
+      <section id="setup" hidden>
+        <p class="cmd-line"><span class="prompt">marton@anka:~$</span> ticker --setup</p>
+        <h1 class="name">tab ticker</h1>
+        <p class="tagline">Puts a live stock price in this tab's <em>title</em>. Pin it in your vertical tab bar and glance &mdash; the favicon goes green/red too.</p>
+        <form id="form" class="form" autocomplete="off">
+          <label>symbol
+            <input id="symbol" placeholder="TSLA" autocapitalize="characters" autocomplete="off" spellcheck="false" required>
+          </label>
+          <label>finnhub api key
+            <input id="key" type="password" placeholder="your finnhub token" autocomplete="off" spellcheck="false" required>
+          </label>
+          <div class="row">
+            <label>refresh (sec)
+              <input id="interval" type="number" min="5" step="1" value="10">
+            </label>
+          </div>
+          <button type="submit" class="btn">start &#9656;</button>
+          <p class="hint">
+            Grab a free key at <a href="https://finnhub.io/register" target="_blank" rel="noopener noreferrer">finnhub.io</a>.
+            Everything is stored only in this page's URL after the <code>#</code> &mdash; so it's bookmarkable, and your key
+            never touches a server here (fragments aren't sent in requests; the key only goes to Finnhub).
+          </p>
+        </form>
+      </section>
+
+      <!-- ===== live ===== -->
+      <section id="live" hidden>
+        <p class="cmd-line"><span class="prompt">$</span> watching <span id="liveSymbol" class="prompt">&mdash;</span></p>
+        <div class="quote">
+          <span id="price" class="price">&mdash;</span>
+          <span id="change" class="change">&mdash;</span>
+        </div>
+        <p class="meta"><span id="status">starting&hellip;</span> &middot; updated <span id="updated">&mdash;</span></p>
+        <p class="meta">tab title &rarr; <code id="titlePreview">&mdash;</code></p>
+        <div class="actions">
+          <button id="edit" type="button" class="btn btn-ghost">change</button>
+          <button id="copy" type="button" class="btn btn-ghost">copy link</button>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- worker source kept as inert text so it needs no escaping; spun up from a Blob to stay single-file -->
+  <script id="worker-src" type="text/worker">
+    var timer = null;
+    onmessage = function (e) {
+      var symbol = e.data.symbol, apiKey = e.data.apiKey, interval = e.data.interval;
+      var url = 'https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(symbol) + '&token=' + encodeURIComponent(apiKey);
+      if (timer) clearInterval(timer);
+      var tick = function () {
+        fetch(url).then(function (res) {
+          if (!res.ok) {
+            postMessage({ error: res.status === 429 ? 'rate limited - slow the refresh'
+              : (res.status === 401 || res.status === 403) ? 'invalid api key'
+              : 'http ' + res.status });
+            return null;
+          }
+          return res.json();
+        }).then(function (d) {
+          if (!d) return;
+          if (typeof d.c === 'number' && d.c !== 0) {
+            postMessage({ symbol: symbol, c: d.c, dp: typeof d.dp === 'number' ? d.dp : 0 });
+          } else {
+            postMessage({ error: 'no data for ' + symbol });
+          }
+        }).catch(function () { postMessage({ error: 'network error' }); });
+      };
+      tick();                              // fetch immediately, don't wait a full interval
+      timer = setInterval(tick, interval);
+    };
+  </script>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      var setupEl = $('setup'), liveEl = $('live'), formEl = $('form');
+      var symEl = $('symbol'), keyEl = $('key'), intEl = $('interval');
+      var priceEl = $('price'), changeEl = $('change'), statusEl = $('status'),
+          updatedEl = $('updated'), titlePrevEl = $('titlePreview'), liveSymEl = $('liveSymbol');
+      var faviconState = true;
+      var faviconFirst = true;
+
+      // --- config <-> URL fragment (base64url of JSON; never leaves the client) ---
+      function enc(o) { return btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+      function dec(s) { try { return JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return null; } }
+      function parseHash() { var h = location.hash.slice(1); return h ? dec(h) : null; }
+
+      // --- worker ---
+      var worker = null, lastKey = '', curSymbol = '';
+      function ensureWorker() {
+        if (worker) return worker;
+        var blob = new Blob([$('worker-src').textContent], { type: 'application/javascript' });
+        worker = new Worker(URL.createObjectURL(blob));
+        worker.onmessage = onTick;
+        return worker;
+      }
+      function startWorker(cfg) {
+        var key = cfg.s + '|' + cfg.k + '|' + cfg.i;
+        if (key === lastKey) return;       // dedupe identical (re)submits
+        lastKey = key;
+        ensureWorker().postMessage({ symbol: cfg.s, apiKey: cfg.k, interval: Math.max(5, parseInt(cfg.i, 10) || 10) * 1000 });
+      }
+
+      function setStatus(text, isErr) { statusEl.textContent = text; statusEl.parentNode.className = 'meta' + (isErr ? ' err' : ''); }
+
+      function onTick(e) {
+        var m = e.data;
+        if (m.error) {
+          document.title = '⚠ ' + (curSymbol || 'ticker');   // ⚠
+          setStatus(m.error, true);
+          return;
+        }
+        var up = m.dp >= 0;
+        var price = m.c.toFixed(2);
+        var pct = (up ? '+' : '') + m.dp.toFixed(2) + '%';
+        var title = m.symbol + ' ' + price + '  ' + pct;
+        document.title = title;
+        setFavicon(up);
+        priceEl.textContent = '$' + price;
+        changeEl.textContent = arrow + ' ' + pct;
+        changeEl.className = 'change ' + (up ? 'up' : 'down');
+        titlePrevEl.textContent = title;
+        updatedEl.textContent = new Date().toLocaleTimeString();
+        setStatus('live', false);
+      }
+
+      // --- color-coded favicon so the vertical tab reads at a glance ---
+      function setFavicon(up) {
+        if (faviconFirst) 
+          faviconFirst = false;
+        else 
+          if (faviconState == up)
+            return;
+        faviconState = up;
+        var c = document.createElement('canvas'); c.width = 32; c.height = 32;
+        var x = c.getContext('2d');
+        x.fillStyle = up ? '#00e676' : '#ff5252';
+        x.beginPath();
+        if (up) { x.moveTo(16, 4); x.lineTo(29, 27); x.lineTo(3, 27); }
+        else    { x.moveTo(16, 28); x.lineTo(29, 5); x.lineTo(3, 5); }
+        x.closePath(); x.fill();
+        var link = document.querySelector('link[rel="icon"]');
+        if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+        link.href = c.toDataURL('image/png');
+      }
+
+      // --- views ---
+      function showSetup(cfg) {
+        liveEl.hidden = true; setupEl.hidden = false;
+        if (cfg) { if (cfg.s) symEl.value = cfg.s; if (cfg.k) keyEl.value = cfg.k; if (cfg.i) intEl.value = cfg.i; }
+        document.title = 'ticker — setup';
+        setTimeout(function () { symEl.focus(); }, 0);
+      }
+      function showLive(cfg) {
+        setupEl.hidden = true; liveEl.hidden = false;
+        curSymbol = cfg.s;
+        liveSymEl.textContent = cfg.s;
+        priceEl.textContent = '—';
+        changeEl.textContent = '—'; changeEl.className = 'change';
+        document.title = '· ' + cfg.s;
+        setStatus('starting…', false);
+        startWorker(cfg);
+      }
+
+      function init() {
+        var cfg = parseHash();
+        if (cfg && cfg.s && cfg.k) showLive(cfg);
+        else showSetup(cfg);
+      }
+
+      formEl.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var s = symEl.value.trim().toUpperCase();
+        var k = keyEl.value.trim();
+        var i = Math.max(5, parseInt(intEl.value, 10) || 10);
+        if (!s || !k) return;
+        location.hash = enc({ s: s, k: k, i: i });   // serialize -> bookmarkable
+        init();                                       // and run now (covers an unchanged hash)
+      });
+
+      $('edit').addEventListener('click', function () { showSetup(parseHash()); });
+      $('copy').addEventListener('click', function (e) {
+        var btn = e.currentTarget;
+        var done = function () { btn.textContent = 'copied ✓'; setTimeout(function () { btn.textContent = 'copy link'; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done, function(){});
+        else { var t = document.createElement('textarea'); t.value = location.href; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e2) {} document.body.removeChild(t); }
+      });
+
+      window.addEventListener('hashchange', init);
+      init();
+    })();
+  </script>
+</body>
 </html>
