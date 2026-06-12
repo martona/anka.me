@@ -53,6 +53,15 @@
     border: 1px solid var(--line-bright); border-radius: 7px; padding: 10px 12px; outline: none; width: 100%;
   }
   input:focus { border-color: var(--green); }
+  .seg { display: flex; border: 1px solid var(--line-bright); border-radius: 7px; overflow: hidden; }
+  .seg-opt { display: block; flex: 1; margin: 0; }
+  .seg-opt input { display: none; }
+  .seg-opt span { display: block; text-align: center; padding: 9px 0; font-size: 0.85rem; color: var(--muted); cursor: pointer; transition: background 0.14s ease, color 0.14s ease; }
+  .seg-opt + .seg-opt span { border-left: 1px solid var(--line-bright); }
+  .seg-opt input:checked + span { background: var(--green-soft); color: #02100a; font-weight: 700; }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ex { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; transition: color 0.14s ease, border-color 0.14s ease; }
+  .ex:hover { color: var(--green); border-color: var(--line-bright); }
   .row { display: flex; gap: 12px; }
   .row label { flex: 1; }
   .btn {
@@ -87,13 +96,18 @@
       <section id="setup" hidden>
         <p class="cmd-line"><span class="prompt">marton@anka:~$</span> ticker --setup</p>
         <h1 class="name">tab ticker</h1>
-        <p class="tagline">Puts a live stock price in this tab's <em>title</em>. Pin it in your vertical tab bar and glance &mdash; the favicon goes green/red too.</p>
+        <p class="tagline">Puts a live stock or crypto price in this tab's <em>title</em>. Pin it in your vertical tab bar and glance &mdash; the favicon goes green/red too.</p>
         <form id="form" class="form" autocomplete="off">
-          <label>symbol
+          <div class="seg" role="radiogroup" aria-label="market">
+            <label class="seg-opt"><input type="radio" name="mode" value="stock" checked><span>stocks</span></label>
+            <label class="seg-opt"><input type="radio" name="mode" value="crypto"><span>crypto</span></label>
+          </div>
+          <label><span id="symLabel">symbol</span>
+            <div class="examples" id="examples"></div>
             <input id="symbol" placeholder="TSLA" autocapitalize="characters" autocomplete="off" spellcheck="false" required>
           </label>
-          <label>finnhub api key
-            <input id="key" type="password" placeholder="your finnhub token" autocomplete="off" spellcheck="false" required>
+          <label id="keyField">finnhub api key
+            <input id="key" type="password" placeholder="your finnhub token" autocomplete="off" spellcheck="false">
           </label>
           <div class="row">
             <label>refresh (sec)
@@ -101,10 +115,15 @@
             </label>
           </div>
           <button type="submit" class="btn">start &#9656;</button>
-          <p class="hint">
+          <p class="hint" id="hintStock">
             Grab a free key at <a href="https://finnhub.io/register" target="_blank" rel="noopener noreferrer">finnhub.io</a>.
             Everything is stored only in this page's URL after the <code>#</code> &mdash; so it's bookmarkable, and your key
             never touches a server here (fragments aren't sent in requests; the key only goes to Finnhub).
+          </p>
+          <p class="hint" id="hintCrypto" hidden>
+            Prices from <a href="https://www.coinbase.com" target="_blank" rel="noopener noreferrer">Coinbase</a> &mdash; no key needed.
+            Enter a coin like <code>BTC</code> (USD assumed) or a full pair like <code>ETH-EUR</code>.
+            Settings live in the URL after the <code>#</code>, so it stays bookmarkable.
           </p>
         </form>
       </section>
@@ -131,27 +150,56 @@
   <script id="worker-src" type="text/worker">
     var timer = null;
     onmessage = function (e) {
-      var symbol = e.data.symbol, apiKey = e.data.apiKey, interval = e.data.interval;
-      var url = 'https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(symbol) + '&token=' + encodeURIComponent(apiKey);
+      var symbol = e.data.symbol, apiKey = e.data.apiKey, mode = e.data.mode, interval = e.data.interval;
       if (timer) clearInterval(timer);
-      var tick = function () {
-        fetch(url).then(function (res) {
-          if (!res.ok) {
-            postMessage({ error: res.status === 429 ? 'rate limited - slow the refresh'
-              : (res.status === 401 || res.status === 403) ? 'invalid api key'
-              : 'http ' + res.status });
-            return null;
-          }
-          return res.json();
-        }).then(function (d) {
-          if (!d) return;
-          if (typeof d.c === 'number' && d.c !== 0) {
-            postMessage({ symbol: symbol, c: d.c, dp: typeof d.dp === 'number' ? d.dp : 0 });
-          } else {
-            postMessage({ error: 'no data for ' + symbol });
-          }
-        }).catch(function () { postMessage({ error: 'network error' }); });
-      };
+      var tick;
+
+      if (mode === 'crypto') {
+        // Coinbase Exchange 24h stats - no key, CORS-friendly. last = price, open = 24h open.
+        var product = symbol.indexOf('-') >= 0 ? symbol : symbol + '-USD';
+        var curl = 'https://api.exchange.coinbase.com/products/' + encodeURIComponent(product) + '/stats';
+        tick = function () {
+          fetch(curl).then(function (res) {
+            if (!res.ok) {
+              postMessage({ error: res.status === 404 ? 'no such pair: ' + product
+                : res.status === 429 ? 'rate limited - slow the refresh'
+                : 'http ' + res.status });
+              return null;
+            }
+            return res.json();
+          }).then(function (d) {
+            if (!d) return;
+            var last = parseFloat(d.last), open = parseFloat(d.open);
+            if (isFinite(last) && last !== 0) {
+              postMessage({ symbol: symbol, c: last, dp: (isFinite(open) && open !== 0) ? (last - open) / open * 100 : 0 });
+            } else {
+              postMessage({ error: 'no data for ' + product });
+            }
+          }).catch(function () { postMessage({ error: 'network error' }); });
+        };
+      } else {
+        // Finnhub quote - needs a key. c = price, dp = percent change.
+        var furl = 'https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(symbol) + '&token=' + encodeURIComponent(apiKey);
+        tick = function () {
+          fetch(furl).then(function (res) {
+            if (!res.ok) {
+              postMessage({ error: res.status === 429 ? 'rate limited - slow the refresh'
+                : (res.status === 401 || res.status === 403) ? 'invalid api key'
+                : 'http ' + res.status });
+              return null;
+            }
+            return res.json();
+          }).then(function (d) {
+            if (!d) return;
+            if (typeof d.c === 'number' && d.c !== 0) {
+              postMessage({ symbol: symbol, c: d.c, dp: typeof d.dp === 'number' ? d.dp : 0 });
+            } else {
+              postMessage({ error: 'no data for ' + symbol });
+            }
+          }).catch(function () { postMessage({ error: 'network error' }); });
+        };
+      }
+
       tick();                              // fetch immediately, don't wait a full interval
       timer = setInterval(tick, interval);
     };
@@ -182,10 +230,11 @@
         return worker;
       }
       function startWorker(cfg) {
-        var key = cfg.s + '|' + cfg.k + '|' + cfg.i;
-        if (key === lastKey) return;       // dedupe identical (re)submits
-        lastKey = key;
-        ensureWorker().postMessage({ symbol: cfg.s, apiKey: cfg.k, interval: Math.max(5, parseInt(cfg.i, 10) || 10) * 1000 });
+        var mode = cfg.m || 'stock';
+        var dk = cfg.s + '|' + cfg.k + '|' + cfg.i + '|' + mode;
+        if (dk === lastKey) return;        // dedupe identical (re)submits
+        lastKey = dk;
+        ensureWorker().postMessage({ symbol: cfg.s, apiKey: cfg.k, mode: mode, interval: Math.max(5, parseInt(cfg.i, 10) || 10) * 1000 });
       }
 
       function setStatus(text, isErr) { statusEl.textContent = text; statusEl.parentNode.className = 'meta' + (isErr ? ' err' : ''); }
@@ -232,8 +281,30 @@
       }
 
       // --- views ---
+      var SAMPLES = { stock: ['SPCX', 'AAPL', 'NVDA'], crypto: ['BTC', 'ETH-EUR'] };
+      function applyMode(mode) {
+        var crypto = mode === 'crypto';
+        $('keyField').hidden = crypto;
+        keyEl.required = !crypto;
+        $('symLabel').textContent = crypto ? 'coin / pair' : 'symbol';
+        symEl.placeholder = crypto ? 'BTC' : 'TSLA';
+        $('hintStock').hidden = crypto;
+        $('hintCrypto').hidden = !crypto;
+        var ex = $('examples'); ex.innerHTML = '';
+        SAMPLES[crypto ? 'crypto' : 'stock'].forEach(function (s) {
+          var b = document.createElement('button');
+          b.type = 'button'; b.className = 'ex'; b.textContent = s;
+          b.addEventListener('click', function () { symEl.value = s; symEl.focus(); });
+          ex.appendChild(b);
+        });
+      }
+
       function showSetup(cfg) {
         liveEl.hidden = true; setupEl.hidden = false;
+        var mode = (cfg && cfg.m) || 'stock';
+        var radio = document.querySelector('input[name="mode"][value="' + mode + '"]');
+        if (radio) radio.checked = true;
+        applyMode(mode);
         if (cfg) { if (cfg.s) symEl.value = cfg.s; if (cfg.k) keyEl.value = cfg.k; if (cfg.i) intEl.value = cfg.i; }
         document.title = 'ticker — setup';
         setTimeout(function () { symEl.focus(); }, 0);
@@ -251,18 +322,24 @@
 
       function init() {
         var cfg = parseHash();
-        if (cfg && cfg.s && cfg.k) showLive(cfg);
+        var mode = cfg && (cfg.m || 'stock');
+        if (cfg && cfg.s && (mode === 'crypto' || cfg.k)) showLive(cfg);
         else showSetup(cfg);
       }
 
+      [].forEach.call(document.querySelectorAll('input[name="mode"]'), function (radio) {
+        radio.addEventListener('change', function () { applyMode(radio.value); });
+      });
+
       formEl.addEventListener('submit', function (e) {
         e.preventDefault();
+        var mode = (document.querySelector('input[name="mode"]:checked') || {}).value || 'stock';
         var s = symEl.value.trim().toUpperCase();
-        var k = keyEl.value.trim();
+        var k = mode === 'crypto' ? '' : keyEl.value.trim();
         var i = Math.max(5, parseInt(intEl.value, 10) || 10);
-        if (!s || !k) return;
-        location.hash = enc({ s: s, k: k, i: i });   // serialize -> bookmarkable
-        init();                                       // and run now (covers an unchanged hash)
+        if (!s || (mode === 'stock' && !k)) return;
+        location.hash = enc({ s: s, k: k, i: i, m: mode });   // serialize -> bookmarkable
+        init();                                                // and run now (covers an unchanged hash)
       });
 
       $('edit').addEventListener('click', function () { showSetup(parseHash()); });

@@ -512,6 +512,15 @@ img {
   width: 1.05rem;
   height: 1.05rem;
   color: var(--green);
+  fill: currentColor;
+}
+
+.os-ic-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .svg-sprite {
