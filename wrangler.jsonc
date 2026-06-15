@@ -1,0 +1,9 @@
+{
+  // Static-assets Worker for anka.me. Lets `npx wrangler deploy` (and Cloudflare
+  // Workers Builds, once the repo is connected) deploy without any CLI flags.
+  "name": "anka-me",
+  "compatibility_date": "2026-05-25",
+  "assets": {
+    "directory": "./public"
+  }
+}

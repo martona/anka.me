@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>clock</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #000;
+    --panel: rgba(0, 0, 0, 0.72);
+    --green: #00ff66;
+    --green-soft: #5fffa0;
+    --green-dim: #1f9e54;
+    --text: #c6f7d3;
+    --muted: #5c8c6a;
+    --line: rgba(0, 255, 102, 0.16);
+    --line-bright: rgba(0, 255, 102, 0.36);
+    --red: #ff5b5b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px; background: var(--bg); color: var(--text);
+    font-family: var(--mono); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .term {
+    width: 100%; max-width: 440px; border: 1px solid var(--line-bright); border-radius: 10px;
+    background: var(--panel); box-shadow: 0 0 24px rgba(0, 255, 102, 0.1), 0 24px 70px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); background: rgba(0, 20, 8, 0.6);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--green-dim); }
+  .dot:first-child { background: var(--green-dim); }
+  .term-title { flex: 1; text-align: center; margin-right: 33px; color: var(--muted); font-size: 0.82rem; }
+  .term-body { padding: 24px; }
+  .prompt { color: var(--green); font-weight: 700; }
+  .cmd-line { margin: 0 0 16px; font-size: 0.9rem; word-break: break-word; }
+  .readout { min-width: 0; margin-bottom: 24px; }
+  .time {
+    display: block; margin: 0; color: var(--green-soft); font-size: clamp(2.25rem, 10vw, 3.2rem);
+    line-height: 1; font-weight: 700; text-shadow: 0 0 18px rgba(0, 255, 102, 0.28);
+  }
+  .date { margin: 10px 0 0; color: var(--muted); font-size: 0.82rem; word-break: break-word; }
+  .form { display: flex; flex-direction: column; gap: 14px; }
+  label, .field-label { display: flex; flex-direction: column; gap: 6px; font-size: 0.78rem; color: var(--muted); letter-spacing: 0.03em; }
+  .seg { display: flex; border: 1px solid var(--line-bright); border-radius: 7px; overflow: hidden; }
+  .seg-opt { display: block; flex: 1; margin: 0; }
+  .seg-opt input { display: none; }
+  .seg-opt span { display: block; text-align: center; padding: 9px 0; font-size: 0.85rem; color: var(--muted); cursor: pointer; transition: background 0.14s ease, color 0.14s ease; }
+  .seg-opt + .seg-opt span { border-left: 1px solid var(--line-bright); }
+  .seg-opt input:checked + span { background: var(--green-soft); color: #02100a; font-weight: 700; }
+  .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  input[type="color"] {
+    width: 100%; height: 42px; padding: 4px; border: 1px solid var(--line-bright); border-radius: 7px;
+    background: rgba(0, 0, 0, 0.5); cursor: pointer;
+  }
+  input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
+  input[type="color"]::-moz-color-swatch { border: none; border-radius: 4px; }
+  .actions { display: flex; gap: 10px; }
+  .btn {
+    flex: 1; font-family: var(--mono); font-weight: 700; font-size: 0.95rem; color: var(--green-soft);
+    background: transparent; border: 1px solid var(--line-bright); border-radius: 7px; padding: 10px 14px;
+    cursor: pointer; transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  }
+  .btn:hover { background: rgba(0, 255, 102, 0.08); color: var(--green); border-color: var(--green-dim); }
+  [hidden] { display: none !important; }
+  @media (max-width: 480px) {
+    .term-body { padding: 20px; }
+    .row { grid-template-columns: 1fr; }
+    .actions { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+  <main class="term">
+    <div class="term-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="term-title">clock</span>
+    </div>
+    <div class="term-body">
+      <p class="cmd-line"><span class="prompt">marton@anka:~$</span> clock --local</p>
+
+      <section class="readout">
+        <time id="timeText" class="time" datetime="">--:--:--</time>
+        <p id="dateText" class="date">local time</p>
+      </section>
+
+      <form id="form" class="form" autocomplete="off">
+        <div class="field-label">
+          readout
+          <div class="seg" role="radiogroup" aria-label="readout format">
+            <label class="seg-opt"><input type="radio" name="format" value="24" checked><span>24h</span></label>
+            <label class="seg-opt"><input type="radio" name="format" value="12"><span>12h</span></label>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>favicon face
+            <input id="faceColor" type="color" value="#020f08">
+          </label>
+          <label>favicon hands
+            <input id="handColor" type="color" value="#5fffa0">
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="copy" type="button" class="btn">copy link</button>
+          <button id="reset" type="button" class="btn">reset</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      var timeEl = $('timeText'), dateEl = $('dateText');
+      var faceEl = $('faceColor'), handEl = $('handColor');
+      var timer = null, lastFavicon = '', lastDateKey = '';
+      var TAU = Math.PI * 2;
+      var DEFAULTS = {
+        format: '24',
+        face: '#020f08',
+        hands: '#5fffa0'
+      };
+      var cfg = cleanConfig(parseHash() || {});
+
+      function enc(o) {
+        return btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      }
+      function dec(s) {
+        try {
+          s = s.replace(/-/g, '+').replace(/_/g, '/');
+          while (s.length % 4) s += '=';
+          return JSON.parse(atob(s));
+        } catch (e) {
+          return null;
+        }
+      }
+      function parseHash() {
+        var h = location.hash.slice(1);
+        return h ? dec(h) : null;
+      }
+      function validColor(v, fallback) {
+        return /^#[0-9a-f]{6}$/i.test(v || '') ? v : fallback;
+      }
+      function cleanConfig(input) {
+        return {
+          format: input.format === '12' ? '12' : DEFAULTS.format,
+          face: validColor(input.face, DEFAULTS.face),
+          hands: validColor(input.hands, DEFAULTS.hands)
+        };
+      }
+      function writeHash() {
+        var next = '#' + enc(cfg);
+        if (location.hash !== next) history.replaceState(null, '', next);
+      }
+      function setLinkIcon(dataUrl) {
+        var link = document.querySelector('link[rel="icon"]');
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'icon';
+          document.head.appendChild(link);
+        }
+        link.href = dataUrl;
+      }
+
+      function formatTime(now) {
+        var h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+        var mm = pad(m), ss = pad(s);
+        if (cfg.format === '12') {
+          var suffix = h >= 12 ? 'PM' : 'AM';
+          var hh = h % 12 || 12;
+          return hh + ':' + mm + ':' + ss + ' ' + suffix;
+        }
+        return pad(h) + ':' + mm + ':' + ss;
+      }
+      function pad(n) {
+        return String(n).padStart(2, '0');
+      }
+      function isoLocal(now) {
+        return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + 'T' +
+          pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+      }
+      function dateLabel(now) {
+        return now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) +
+          ' - ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+      }
+      function dayKey(now) {
+        return now.getFullYear() + '-' + now.getMonth() + '-' + now.getDate();
+      }
+      function render(now) {
+        var text = formatTime(now);
+        var currentDay = dayKey(now);
+
+        timeEl.textContent = text;
+        timeEl.dateTime = isoLocal(now);
+        if (currentDay !== lastDateKey) {
+          lastDateKey = currentDay;
+          dateEl.textContent = dateLabel(now);
+        }
+        document.title = text;
+        drawFavicon(now);
+      }
+      function drawHand(ctx, angle, length, width, color) {
+        var cx = 32, cy = 32;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(0, 2);
+        ctx.lineTo(0, -length);
+        ctx.stroke();
+        ctx.restore();
+      }
+      function drawFavicon(now) {
+        var key = [
+          now.getHours(), now.getMinutes(), cfg.face, cfg.hands
+        ].join('|');
+        if (key === lastFavicon) return;
+        lastFavicon = key;
+
+        var c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 64;
+        var x = c.getContext('2d');
+        var h = now.getHours(), m = now.getMinutes();
+        var hourAngle = (((h % 12) + m / 60) / 12) * TAU;
+        var minuteAngle = (m / 60) * TAU;
+
+        x.clearRect(0, 0, 64, 64);
+        x.fillStyle = cfg.face;
+        x.beginPath();
+        x.arc(32, 32, 29, 0, TAU);
+        x.fill();
+        x.strokeStyle = cfg.hands;
+        x.globalAlpha = 0.55;
+        x.lineWidth = 2;
+        x.beginPath();
+        x.arc(32, 32, 29, 0, TAU);
+        x.stroke();
+        x.globalAlpha = 1;
+
+        [[32, 8], [56, 32], [32, 56], [8, 32]].forEach(function (p) {
+          x.fillStyle = cfg.hands;
+          x.beginPath();
+          x.arc(p[0], p[1], 3.2, 0, TAU);
+          x.fill();
+        });
+
+        drawHand(x, hourAngle, 15, 5, cfg.hands);
+        drawHand(x, minuteAngle, 22, 3.5, cfg.hands);
+
+        x.fillStyle = cfg.hands;
+        x.beginPath();
+        x.arc(32, 32, 3.5, 0, TAU);
+        x.fill();
+        setLinkIcon(c.toDataURL('image/png'));
+      }
+      function applyConfig() {
+        faceEl.value = cfg.face;
+        handEl.value = cfg.hands;
+        var radio = document.querySelector('input[name="format"][value="' + cfg.format + '"]');
+        if (radio) radio.checked = true;
+        writeHash();
+        lastFavicon = '';
+        render(new Date());
+      }
+      function schedule() {
+        var now = new Date();
+        render(now);
+        timer = setTimeout(schedule, 1000 - now.getMilliseconds() + 10);
+      }
+
+      [].forEach.call(document.querySelectorAll('input[name="format"]'), function (radio) {
+        radio.addEventListener('change', function () {
+          cfg.format = radio.value === '12' ? '12' : '24';
+          applyConfig();
+        });
+      });
+      faceEl.addEventListener('input', function () { cfg.face = faceEl.value; applyConfig(); });
+      handEl.addEventListener('input', function () { cfg.hands = handEl.value; applyConfig(); });
+      $('reset').addEventListener('click', function () {
+        cfg = cleanConfig(DEFAULTS);
+        applyConfig();
+      });
+      $('copy').addEventListener('click', function (e) {
+        var btn = e.currentTarget;
+        var old = btn.textContent;
+        var done = function () {
+          btn.textContent = 'copied';
+          setTimeout(function () { btn.textContent = old; }, 1500);
+        };
+        writeHash();
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done, function () {});
+        else {
+          var t = document.createElement('textarea');
+          t.value = location.href;
+          document.body.appendChild(t);
+          t.select();
+          try { document.execCommand('copy'); done(); } catch (e2) {}
+          document.body.removeChild(t);
+        }
+      });
+      window.addEventListener('hashchange', function () {
+        cfg = cleanConfig(parseHash() || DEFAULTS);
+        applyConfig();
+      });
+
+      applyConfig();
+      if (timer) clearTimeout(timer);
+      schedule();
+    })();
+  </script>
+</body>
+</html>
