@@ -483,7 +483,7 @@ Step 'Collapsing the taskbar search box to an icon'
 Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'SearchboxTaskbarMode' 1
 
 Step 'Disabling Start menu recommendations and recently added'
-Set-Reg $advTaskbar 'Start_TrackDocs' 0            # recently opened items
+Set-Reg $advTaskbar 'Start_TrackDocs' 1            # recently opened items AND jump lists
 Set-Reg $advTaskbar 'Start_IrisRecommendations' 1  # tips / recommendations
 $cdm = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
 Set-Reg $cdm 'SubscribedContent-338389Enabled' 0   # "Get tips and suggestions when using Windows"
