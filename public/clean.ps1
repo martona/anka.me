@@ -484,8 +484,11 @@ Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'SearchboxTaskb
 
 Step 'Disabling Start menu recommendations and recently added'
 Set-Reg $advTaskbar 'Start_TrackDocs' 0            # recently opened items
-Set-Reg $advTaskbar 'Start_IrisRecommendations' 0  # tips / recommendations
-Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 1
+Set-Reg $advTaskbar 'Start_IrisRecommendations' 1  # tips / recommendations
+$cdm = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+Set-Reg $cdm 'SubscribedContent-338389Enabled' 0   # "Get tips and suggestions when using Windows"
+Set-Reg $cdm 'SoftLandingEnabled' 0                # tip pop-ups/highlights
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection' 0
 
 # ===========================================================================
 Section 'Restarting Explorer'
