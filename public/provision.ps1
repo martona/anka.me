@@ -2,19 +2,20 @@
   provision.ps1 - one-off machine provisioning steps
   ---------------------------------------------------
   Run elevated (Windows PowerShell 5.1). With no args it shows a menu; with
-  --all it runs every step in order, unattended.
+  --all it runs every step in order, unattended. The rename step is menu-only
+  unless a new name is supplied with --name.
 
       powershell -ExecutionPolicy Bypass -File .\provision.ps1
-      powershell -ExecutionPolicy Bypass -File .\provision.ps1 --all
+      powershell -ExecutionPolicy Bypass -File .\provision.ps1 --all [--name NEWPC]
 
   Or straight off a site, no download (execution policy does not gate iex):
 
       irm https://anka.me/provision.ps1 | iex
       & ([scriptblock]::Create((irm https://anka.me/provision.ps1))) --all
 
-  Most steps need administrator rights; 6 (user cert) and 7 (execution policy)
-  do not, but the script requires elevation overall. DESTRUCTIVE: deletes
-  restore points and removes the pagefile.
+  Most steps need administrator rights (the cert, execution-policy and dark
+  mode steps are per-user), but the script requires elevation overall.
+  DESTRUCTIVE: deletes restore points and removes the pagefile.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -34,10 +35,15 @@ function Fail ($m) { Write-Host 'x   '  -ForegroundColor Red    -NoNewline; Writ
 # ---- args ------------------------------------------------------------------
 $All  = [bool]($args | Where-Object { $_ -match '^(--?all|/all)$' })
 $Help = [bool]($args | Where-Object { $_ -match '^(--?help|/\?|-h)$' })
+$NewName = $null
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -match '^(--?name|/name)$' -and $i + 1 -lt $args.Count) { $NewName = [string]$args[$i + 1] }
+}
 if ($Help) {
     Write-Host ''
     Write-Host '  provision.ps1 - menu of machine setup steps.' -ForegroundColor White
     Note 'run with no args for the menu, or --all to run everything unattended.'
+    Note '--all skips the rename step unless --name NEWPC is also given.'
     Write-Host ''
     return
 }
@@ -205,7 +211,98 @@ function Invoke-ExecPolicy {
     }
 }
 
-# 8) download and run clean.ps1 (the debloat script) straight from the site.
+# 8) set the active network connection(s) to the Private profile.
+function Invoke-NetPrivate {
+    Step 'Setting the active network connection(s) to Private...'
+    $profiles = @(Get-NetConnectionProfile)
+    if (-not $profiles) { Note 'No active network connections.'; return }
+    foreach ($p in $profiles) {
+        $label = "$($p.InterfaceAlias) ($($p.Name))"
+        if ($p.NetworkCategory -eq 'DomainAuthenticated') {
+            Note "$label is domain-authenticated - leaving it alone."
+        } elseif ($p.NetworkCategory -eq 'Private') {
+            Note "$label is already Private."
+        } else {
+            Set-NetConnectionProfile -InterfaceIndex $p.InterfaceIndex -NetworkCategory Private
+            Done "$label -> Private."
+        }
+    }
+}
+
+# 9) enable Remote Desktop: NLA on, connections allowed, firewall open, service auto.
+function Invoke-EnableRdp {
+    Step 'Enabling Remote Desktop...'
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Type DWord -Force
+    Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' | Out-Null
+    Set-Service -Name TermService -StartupType Automatic
+    Start-Service -Name TermService -ErrorAction SilentlyContinue
+    Done 'RDP enabled (with Network Level Authentication) - the machine accepts remote connections.'
+}
+
+# 10) switch Windows to dark mode and broadcast the change so open apps repaint.
+function Invoke-DarkMode {
+    Step 'Switching Windows to dark mode...'
+    $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+    # Windows is inverted here: 0 = dark theme, 1 = light theme.
+    Set-ItemProperty -Path $p -Name 'SystemUsesLightTheme' -Value 0 -Type DWord
+    Set-ItemProperty -Path $p -Name 'AppsUseLightTheme'    -Value 0 -Type DWord
+    if (-not ('Theme' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Theme {
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+        uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+}
+'@
+    }
+    # WM_SETTINGCHANGE 'ImmersiveColorSet' to HWND_BROADCAST (SMTO_ABORTIFHUNG, 5s).
+    $result = [UIntPtr]::Zero
+    [Theme]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'ImmersiveColorSet', 0x0002, 5000, [ref]$result) | Out-Null
+    Done 'Windows is now in dark mode.'
+}
+
+# 11) put Dark Reader on Edge's force-install list (documented enterprise policy).
+function Invoke-DarkReader {
+    Step 'Adding Dark Reader to the Edge force-installed extensions...'
+    $id  = 'ifoakfbpdcdoeenechcleahebpibofpc'   # Dark Reader's id on the Edge Add-ons store
+    $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
+    New-Item -Path $key -Force | Out-Null
+    $names = @((Get-Item $key).Property)
+    $entries = foreach ($n in $names) { (Get-ItemProperty -Path $key -Name $n).$n }
+    if ($entries -match "^$id") {
+        Note 'Already on the force-install list - nothing to do.'
+        return
+    }
+    $i = 1
+    while ($names -contains "$i") { $i++ }
+    Set-ItemProperty -Path $key -Name "$i" -Value "$id;https://edge.microsoft.com/extensionwebstorebase/v1/crx" -Type String
+    Done 'Dark Reader installs (or becomes policy-managed, if present) on the next Edge start.'
+    Note 'Undo: remove the entry under HKLM\...\Policies\Microsoft\Edge\ExtensionInstallForcelist.'
+}
+
+# 12) show the computer name and set a new one. The menu prompts for it; --all
+#     runs this only when --name <newname> was given on the command line.
+function Invoke-Rename {
+    Step "This computer is named '$env:COMPUTERNAME'."
+    $target = $NewName
+    if (-not $target) {
+        $target = (Read-Host '    new name (Enter keeps it)').Trim()
+        if (-not $target) { Note 'Keeping the current name.'; return }
+    }
+    if ($target -ieq $env:COMPUTERNAME) { Note "Already named '$target' - nothing to do."; return }
+    if ($target -notmatch '^[A-Za-z0-9-]{1,15}$') {
+        throw "'$target' is not a valid computer name (1-15 letters, digits or hyphens)."
+    }
+    Rename-Computer -NewName $target -Force -WarningAction SilentlyContinue | Out-Null
+    $script:RebootNeeded = $true
+    Done "Renamed to '$target' - takes effect after a reboot."
+}
+
+# 13) download and run clean.ps1 (the debloat script) straight from the site.
 function Invoke-RemoteClean {
     Step 'Fetching https://anka.me/clean.ps1 and running it...'
     # Win10/11 ship .NET 4.8 (OS TLS defaults); the -bor keeps 1.2 on for older builds.
@@ -225,8 +322,13 @@ $steps = @(
     [pscustomobject]@{ Key = '4'; Title = 'Share C:\ as "C" (full control, current user only)';     Fn = 'Invoke-ShareC';             Tag = '' }
     [pscustomobject]@{ Key = '5'; Title = 'Make Edge reopen previous tabs on startup';              Fn = 'Invoke-EdgeRestore';        Tag = '' }
     [pscustomobject]@{ Key = '6'; Title = "Trust root CA (current user)";                           Fn = 'Invoke-ImportCert';         Tag = '' }
-    [pscustomobject]@{ Key = '7'; Title = 'Execution policy: RemoteSigned (current user)';          Fn = 'Invoke-ExecPolicy';         Tag = '' }
-    [pscustomobject]@{ Key = '8'; Title = 'Run clean.ps1 (debloat) from https://anka.me';           Fn = 'Invoke-RemoteClean';        Tag = 'network' }
+    [pscustomobject]@{ Key = '7';  Title = 'Execution policy: RemoteSigned (current user)';         Fn = 'Invoke-ExecPolicy';         Tag = '' }
+    [pscustomobject]@{ Key = '8';  Title = 'Set the active network connection(s) to Private';       Fn = 'Invoke-NetPrivate';         Tag = '' }
+    [pscustomobject]@{ Key = '9';  Title = 'Enable Remote Desktop (NLA, firewall, service)';        Fn = 'Invoke-EnableRdp';          Tag = '' }
+    [pscustomobject]@{ Key = '10'; Title = 'Switch Windows to dark mode';                           Fn = 'Invoke-DarkMode';           Tag = '' }
+    [pscustomobject]@{ Key = '11'; Title = 'Install Dark Reader for Edge (policy)';                 Fn = 'Invoke-DarkReader';         Tag = '' }
+    [pscustomobject]@{ Key = '12'; Title = 'Rename this computer (asks for the new name)';          Fn = 'Invoke-Rename';             Tag = 'reboot' }
+    [pscustomobject]@{ Key = '13'; Title = 'Run clean.ps1 (debloat) from https://anka.me';          Fn = 'Invoke-RemoteClean';        Tag = 'network' }
 )
 
 function Invoke-OneStep ($step) {
@@ -245,7 +347,14 @@ function Show-RebootReminder {
 # ---- run -------------------------------------------------------------------
 if ($All) {
     Section 'Provisioning - running all steps'
-    foreach ($s in $steps) { Invoke-OneStep $s }
+    foreach ($s in $steps) {
+        if ($s.Fn -eq 'Invoke-Rename' -and -not $NewName) {
+            Write-Host ''
+            Note 'Skipping the rename step (no --name given).'
+            continue
+        }
+        Invoke-OneStep $s
+    }
     Show-RebootReminder
     Write-Host ''
     Done 'All steps complete.'
@@ -258,15 +367,15 @@ while ($true) {
     Write-Host ' - machine setup steps' -ForegroundColor Gray
     Write-Host '  -----------------------------------------------' -ForegroundColor DarkGray
     foreach ($s in $steps) {
-        Write-Host "  [$($s.Key)] " -ForegroundColor Cyan -NoNewline
+        Write-Host "  [$($s.Key.PadLeft(2))] " -ForegroundColor Cyan -NoNewline
         Write-Host $s.Title -ForegroundColor White -NoNewline
         if ($s.Tag -eq 'destructive') { Write-Host '  (destructive)' -ForegroundColor Red -NoNewline }
         elseif ($s.Tag -eq 'reboot')  { Write-Host '  (reboot)'      -ForegroundColor Yellow -NoNewline }
         elseif ($s.Tag -eq 'network') { Write-Host '  (network)'     -ForegroundColor DarkGray -NoNewline }
         Write-Host ''
     }
-    Write-Host '  [a] ' -ForegroundColor Cyan -NoNewline; Write-Host 'run all' -ForegroundColor White
-    Write-Host '  [q] ' -ForegroundColor Cyan -NoNewline; Write-Host 'quit'    -ForegroundColor White
+    Write-Host '  [ a] ' -ForegroundColor Cyan -NoNewline; Write-Host 'run all' -ForegroundColor White
+    Write-Host '  [ q] ' -ForegroundColor Cyan -NoNewline; Write-Host 'quit'    -ForegroundColor White
     Write-Host ''
 
     $choice = (Read-Host '  run which?').Trim()
