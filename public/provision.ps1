@@ -32,6 +32,13 @@ function Note ($m) { Write-Host "    $m" -ForegroundColor DarkGray }
 function Warn ($m) { Write-Host '!   '  -ForegroundColor Yellow -NoNewline; Write-Host $m -ForegroundColor White }
 function Fail ($m) { Write-Host 'x   '  -ForegroundColor Red    -NoNewline; Write-Host $m -ForegroundColor White }
 
+# Create a registry key only if it's missing: New-Item -Force on an existing
+# key RECREATES it, wiping its values and subkeys (e.g. the Edge policy key
+# and everything under it).
+function Ensure-RegKey ($Path) {
+    if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+}
+
 # ---- args ------------------------------------------------------------------
 $All  = [bool]($args | Where-Object { $_ -match '^(--?all|/all)$' })
 $Help = [bool]($args | Where-Object { $_ -match '^(--?help|/\?|-h)$' })
@@ -71,13 +78,14 @@ function Invoke-DisableRestore {
     if (Get-Command Disable-ComputerRestore -ErrorAction SilentlyContinue) {
         Disable-ComputerRestore -Drive 'C:\'
     } else {
-        # PowerShell 7 dropped the cmdlet: purge the shadow copies (restore points
-        # are VSS shadows on the system drive) and disable via policy instead.
-        Note 'Disable-ComputerRestore not available - falling back to vssadmin + policy.'
-        & vssadmin delete shadows /for=C: /all /quiet *> $null
-        New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore' -Force | Out-Null
+        # PowerShell 7 dropped the cmdlet: disable via policy instead.
+        Note 'Disable-ComputerRestore not available - falling back to policy.'
+        Ensure-RegKey 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore'
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore' -Name 'DisableSR' -Value 1 -Type DWord
     }
+    # Disabling protection does not reliably purge existing shadow copies
+    # (restore points are VSS shadows on the system drive) - do it explicitly.
+    & vssadmin delete shadows /for=C: /all /quiet *> $null
     Done 'System Protection off; restore points cleared on C:\.'
 }
 
@@ -135,7 +143,7 @@ function Invoke-ShareC {
 function Invoke-EdgeRestore {
     Step 'Setting Edge to reopen the previous tabs on startup...'
     $edge = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
-    New-Item -Path $edge -Force | Out-Null
+    Ensure-RegKey $edge
     Set-ItemProperty -Path $edge -Name 'RestoreOnStartup' -Value 1 -Type DWord   # 1 = restore last session
     Done 'Edge will restore the last session on startup.'
     Note 'This is the enterprise policy, so Edge will show "managed by your organization"'
@@ -270,7 +278,7 @@ function Invoke-DarkReader {
     Step 'Adding Dark Reader to the Edge force-installed extensions...'
     $id  = 'ifoakfbpdcdoeenechcleahebpibofpc'   # Dark Reader's id on the Edge Add-ons store
     $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'
-    New-Item -Path $key -Force | Out-Null
+    Ensure-RegKey $key
     $names = @((Get-Item $key).Property)
     $entries = foreach ($n in $names) { (Get-ItemProperty -Path $key -Name $n).$n }
     if ($entries -match "^$id") {
@@ -284,7 +292,19 @@ function Invoke-DarkReader {
     Note 'Undo: remove the entry under HKLM\...\Policies\Microsoft\Edge\ExtensionInstallForcelist.'
 }
 
-# 12) show the computer name and set a new one. The menu prompts for it; --all
+# 12) set the time zone to US Eastern.
+function Invoke-TimeZone {
+    Step 'Setting the time zone to US Eastern...'
+    $cur = Get-TimeZone
+    if ($cur.Id -eq 'Eastern Standard Time') {
+        Note "Already '$($cur.Id)' - nothing to do."
+    } else {
+        Set-TimeZone -Id 'Eastern Standard Time'
+        Done "Time zone: '$($cur.Id)' -> 'Eastern Standard Time'."
+    }
+}
+
+# 13) show the computer name and set a new one. The menu prompts for it; --all
 #     runs this only when --name <newname> was given on the command line.
 function Invoke-Rename {
     Step "This computer is named '$env:COMPUTERNAME'."
@@ -302,7 +322,7 @@ function Invoke-Rename {
     Done "Renamed to '$target' - takes effect after a reboot."
 }
 
-# 13) download and run clean.ps1 (the debloat script) straight from the site.
+# 14) download and run clean.ps1 (the debloat script) straight from the site.
 function Invoke-RemoteClean {
     Step 'Fetching https://anka.me/clean.ps1 and running it...'
     # Win10/11 ship .NET 4.8 (OS TLS defaults); the -bor keeps 1.2 on for older builds.
@@ -312,6 +332,27 @@ function Invoke-RemoteClean {
     # child scope, so clean.ps1's own helper functions can't clobber ours
     & ([scriptblock]::Create($src))
     Done 'clean.ps1 finished.'
+}
+
+# ---- cheap state probes ----------------------------------------------------
+# Each probe returns $true when its step is already in the desired end state;
+# the menu renders done/todo from this. Steps without a probe (rename, clean.ps1)
+# show no state. Probes run on every menu redraw - keep them read-only and fast.
+$checks = @{
+    # RPSessionInterval is the OS's own protection flag: 1 = SR on, 0 = off.
+    'Invoke-DisableRestore'     = { $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -ErrorAction SilentlyContinue).RPSessionInterval; if ($null -ne $v) { $v -eq 0 } }
+    'Invoke-DisableHibernation' = { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -ErrorAction SilentlyContinue).HibernateEnabled -eq 0 }
+    'Invoke-DisablePagefile'    = { -not (Get-CimInstance -ClassName Win32_ComputerSystem).AutomaticManagedPagefile -and -not (Get-CimInstance -ClassName Win32_PageFileSetting -ErrorAction SilentlyContinue) }
+    'Invoke-ShareC'             = { [bool](Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq 'C:\' -and -not $_.Special }) }
+    'Invoke-EdgeRestore'        = { (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -ErrorAction SilentlyContinue).RestoreOnStartup -eq 1 }
+    # keep the thumbprint in sync with the PEM inside Invoke-ImportCert
+    'Invoke-ImportCert'         = { Test-Path 'Cert:\CurrentUser\Root\E0096052D4A02B61CB4E357B933981E9D35AD2C0' }
+    'Invoke-ExecPolicy'         = { (Get-ExecutionPolicy -Scope CurrentUser) -eq 'RemoteSigned' }
+    'Invoke-NetPrivate'         = { -not (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq 'Public' }) }
+    'Invoke-EnableRdp'          = { (Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue).fDenyTSConnections -eq 0 }
+    'Invoke-DarkMode'           = { $p = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue; $p.AppsUseLightTheme -eq 0 -and $p.SystemUsesLightTheme -eq 0 }
+    'Invoke-DarkReader'         = { $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'; if (Test-Path $k) { [bool](@((Get-Item $k).Property | ForEach-Object { (Get-ItemProperty -Path $k -Name $_).$_ }) -match '^ifoakfbpdcdoeenechcleahebpibofpc') } else { $false } }
+    'Invoke-TimeZone'           = { (Get-TimeZone).Id -eq 'Eastern Standard Time' }
 }
 
 # ---- catalog ---------------------------------------------------------------
@@ -327,8 +368,9 @@ $steps = @(
     [pscustomobject]@{ Key = '9';  Title = 'Enable Remote Desktop (NLA, firewall, service)';        Fn = 'Invoke-EnableRdp';          Tag = '' }
     [pscustomobject]@{ Key = '10'; Title = 'Switch Windows to dark mode';                           Fn = 'Invoke-DarkMode';           Tag = '' }
     [pscustomobject]@{ Key = '11'; Title = 'Install Dark Reader for Edge (policy)';                 Fn = 'Invoke-DarkReader';         Tag = '' }
-    [pscustomobject]@{ Key = '12'; Title = 'Rename this computer (asks for the new name)';          Fn = 'Invoke-Rename';             Tag = 'reboot' }
-    [pscustomobject]@{ Key = '13'; Title = 'Run clean.ps1 (debloat) from https://anka.me';          Fn = 'Invoke-RemoteClean';        Tag = 'network' }
+    [pscustomobject]@{ Key = '12'; Title = 'Set the time zone to US Eastern';                       Fn = 'Invoke-TimeZone';           Tag = '' }
+    [pscustomobject]@{ Key = '13'; Title = 'Rename this computer (asks for the new name)';          Fn = 'Invoke-Rename';             Tag = 'reboot' }
+    [pscustomobject]@{ Key = '14'; Title = 'Run clean.ps1 (debloat) from https://anka.me';          Fn = 'Invoke-RemoteClean';        Tag = 'network' }
 )
 
 function Invoke-OneStep ($step) {
@@ -367,15 +409,26 @@ while ($true) {
     Write-Host ' - machine setup steps' -ForegroundColor Gray
     Write-Host '  -----------------------------------------------' -ForegroundColor DarkGray
     foreach ($s in $steps) {
+        $state = ''
+        if ($checks.ContainsKey($s.Fn)) {
+            # A probe returning $null means "can't tell here" - show no state, not todo.
+            try {
+                $r = & $checks[$s.Fn]
+                if ($null -ne $r) { $state = if ($r) { 'done' } else { 'todo' } }
+            } catch { $state = '' }
+        }
         Write-Host "  [$($s.Key.PadLeft(2))] " -ForegroundColor Cyan -NoNewline
-        Write-Host $s.Title -ForegroundColor White -NoNewline
+        if     ($state -eq 'done') { Write-Host 'done  ' -ForegroundColor DarkGreen -NoNewline }
+        elseif ($state -eq 'todo') { Write-Host 'todo  ' -ForegroundColor Yellow    -NoNewline }
+        else                       { Write-Host '      '                            -NoNewline }
+        Write-Host $s.Title -ForegroundColor $(if ($state -eq 'done') { 'DarkGray' } else { 'White' }) -NoNewline
         if ($s.Tag -eq 'destructive') { Write-Host '  (destructive)' -ForegroundColor Red -NoNewline }
         elseif ($s.Tag -eq 'reboot')  { Write-Host '  (reboot)'      -ForegroundColor Yellow -NoNewline }
         elseif ($s.Tag -eq 'network') { Write-Host '  (network)'     -ForegroundColor DarkGray -NoNewline }
         Write-Host ''
     }
-    Write-Host '  [ a] ' -ForegroundColor Cyan -NoNewline; Write-Host 'run all' -ForegroundColor White
-    Write-Host '  [ q] ' -ForegroundColor Cyan -NoNewline; Write-Host 'quit'    -ForegroundColor White
+    Write-Host '  [ a] ' -ForegroundColor Cyan -NoNewline; Write-Host '      run all' -ForegroundColor White
+    Write-Host '  [ q] ' -ForegroundColor Cyan -NoNewline; Write-Host '      quit'    -ForegroundColor White
     Write-Host ''
 
     $choice = (Read-Host '  run which?').Trim()
