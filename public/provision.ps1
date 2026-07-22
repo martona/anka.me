@@ -139,15 +139,20 @@ function Invoke-ShareC {
     }
 }
 
-# 5) make Edge restore the previous session on startup (documented enterprise policy).
-function Invoke-EdgeRestore {
-    Step 'Setting Edge to reopen the previous tabs on startup...'
+# 5) Edge: skip the first-run wizard, disable startup boost.
+#    Tab restore is deliberately NOT automated: empirically (mid-2026 Edge) the
+#    RestoreOnStartup=1 policy loads but does not restore tabs, and the
+#    session.restore_on_startup pref is MAC/enclave-protected, so direct
+#    Preferences edits self-revert and initial_preferences seeding is ignored.
+#    Flip it by hand instead: edge://settings/onStartup.
+function Invoke-EdgeSetup {
+    Step 'Configuring Edge: no first-run wizard, no startup boost...'
     $edge = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     Ensure-RegKey $edge
-    Set-ItemProperty -Path $edge -Name 'RestoreOnStartup' -Value 1 -Type DWord   # 1 = restore last session
-    Done 'Edge will restore the last session on startup.'
-    Note 'This is the enterprise policy, so Edge will show "managed by your organization"'
-    Note 'and the setting is locked. Undo: delete RestoreOnStartup under HKLM\...\Policies\Microsoft\Edge.'
+    Set-ItemProperty -Path $edge -Name 'HideFirstRunExperience' -Value 1 -Type DWord   # no welcome wizard / splash
+    Set-ItemProperty -Path $edge -Name 'AutoImportAtFirstRun'   -Value 4 -Type DWord   # 4 = DisabledAutoImport
+    Set-ItemProperty -Path $edge -Name 'StartupBoostEnabled'    -Value 0 -Type DWord   # close really closes; policies load on next start
+    Done 'First-run wizard suppressed; startup boost off.'
 }
 
 # 6) import root CA into the current user's Trusted Root store.
@@ -344,7 +349,8 @@ $checks = @{
     'Invoke-DisableHibernation' = { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -ErrorAction SilentlyContinue).HibernateEnabled -eq 0 }
     'Invoke-DisablePagefile'    = { -not (Get-CimInstance -ClassName Win32_ComputerSystem).AutomaticManagedPagefile -and -not (Get-CimInstance -ClassName Win32_PageFileSetting -ErrorAction SilentlyContinue) }
     'Invoke-ShareC'             = { [bool](Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq 'C:\' -and -not $_.Special }) }
-    'Invoke-EdgeRestore'        = { (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -ErrorAction SilentlyContinue).RestoreOnStartup -eq 1 }
+    'Invoke-EdgeSetup'          = { $pol = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -ErrorAction SilentlyContinue
+                                    $pol.HideFirstRunExperience -eq 1 -and $pol.AutoImportAtFirstRun -eq 4 -and $pol.StartupBoostEnabled -eq 0 }
     # keep the thumbprint in sync with the PEM inside Invoke-ImportCert
     'Invoke-ImportCert'         = { Test-Path 'Cert:\CurrentUser\Root\E0096052D4A02B61CB4E357B933981E9D35AD2C0' }
     'Invoke-ExecPolicy'         = { (Get-ExecutionPolicy -Scope CurrentUser) -eq 'RemoteSigned' }
@@ -357,20 +363,20 @@ $checks = @{
 
 # ---- catalog ---------------------------------------------------------------
 $steps = @(
-    [pscustomobject]@{ Key = '1'; Title = 'Delete restore points + disable System Protection (C:)'; Fn = 'Invoke-DisableRestore';    Tag = 'destructive' }
-    [pscustomobject]@{ Key = '2'; Title = 'Disable hibernation (removes hiberfil.sys)';             Fn = 'Invoke-DisableHibernation'; Tag = '' }
-    [pscustomobject]@{ Key = '3'; Title = 'Disable the pagefile completely';                        Fn = 'Invoke-DisablePagefile';    Tag = 'reboot' }
-    [pscustomobject]@{ Key = '4'; Title = 'Share C:\ as "C" (full control, current user only)';     Fn = 'Invoke-ShareC';             Tag = '' }
-    [pscustomobject]@{ Key = '5'; Title = 'Make Edge reopen previous tabs on startup';              Fn = 'Invoke-EdgeRestore';        Tag = '' }
-    [pscustomobject]@{ Key = '6'; Title = "Trust root CA (current user)";                           Fn = 'Invoke-ImportCert';         Tag = '' }
-    [pscustomobject]@{ Key = '7';  Title = 'Execution policy: RemoteSigned (current user)';         Fn = 'Invoke-ExecPolicy';         Tag = '' }
-    [pscustomobject]@{ Key = '8';  Title = 'Set the active network connection(s) to Private';       Fn = 'Invoke-NetPrivate';         Tag = '' }
-    [pscustomobject]@{ Key = '9';  Title = 'Enable Remote Desktop (NLA, firewall, service)';        Fn = 'Invoke-EnableRdp';          Tag = '' }
-    [pscustomobject]@{ Key = '10'; Title = 'Switch Windows to dark mode';                           Fn = 'Invoke-DarkMode';           Tag = '' }
-    [pscustomobject]@{ Key = '11'; Title = 'Install Dark Reader for Edge (policy)';                 Fn = 'Invoke-DarkReader';         Tag = '' }
-    [pscustomobject]@{ Key = '12'; Title = 'Set the time zone to US Eastern';                       Fn = 'Invoke-TimeZone';           Tag = '' }
-    [pscustomobject]@{ Key = '13'; Title = 'Rename this computer (asks for the new name)';          Fn = 'Invoke-Rename';             Tag = 'reboot' }
-    [pscustomobject]@{ Key = '14'; Title = 'Run clean.ps1 (debloat) from https://anka.me';          Fn = 'Invoke-RemoteClean';        Tag = 'network' }
+    [pscustomobject]@{ Key = '1' ; Title = 'Delete restore points + disable System Protection (C:)'; Fn = 'Invoke-DisableRestore';     Tag = '' }
+    [pscustomobject]@{ Key = '2' ; Title = 'Disable hibernation (removes hiberfil.sys)';             Fn = 'Invoke-DisableHibernation'; Tag = '' }
+    [pscustomobject]@{ Key = '3' ; Title = 'Disable the pagefile completely';                        Fn = 'Invoke-DisablePagefile';    Tag = 'reboot' }
+    [pscustomobject]@{ Key = '4' ; Title = 'Share C:\ as "C" (full control, current user only)';     Fn = 'Invoke-ShareC';             Tag = '' }
+    [pscustomobject]@{ Key = '5' ; Title = 'Edge: no first-run wizard, no startup boost';            Fn = 'Invoke-EdgeSetup';          Tag = '' }
+    [pscustomobject]@{ Key = '6' ; Title = "Trust root CA (current user)";                           Fn = 'Invoke-ImportCert';         Tag = '' }
+    [pscustomobject]@{ Key = '7' ; Title = 'Execution policy: RemoteSigned (current user)';          Fn = 'Invoke-ExecPolicy';         Tag = '' }
+    [pscustomobject]@{ Key = '8' ; Title = 'Set the active network connection(s) to Private';        Fn = 'Invoke-NetPrivate';         Tag = '' }
+    [pscustomobject]@{ Key = '9' ; Title = 'Enable Remote Desktop (NLA, firewall, service)';         Fn = 'Invoke-EnableRdp';          Tag = '' }
+    [pscustomobject]@{ Key = '10'; Title = 'Switch Windows to dark mode';                            Fn = 'Invoke-DarkMode';           Tag = '' }
+    [pscustomobject]@{ Key = '11'; Title = 'Install Dark Reader for Edge (policy)';                  Fn = 'Invoke-DarkReader';         Tag = '' }
+    [pscustomobject]@{ Key = '12'; Title = 'Set the time zone to US Eastern';                        Fn = 'Invoke-TimeZone';           Tag = '' }
+    [pscustomobject]@{ Key = '13'; Title = 'Rename this computer (asks for the new name)';           Fn = 'Invoke-Rename';             Tag = 'reboot' }
+    [pscustomobject]@{ Key = '14'; Title = 'Run clean.ps1 (debloat) from https://anka.me';           Fn = 'Invoke-RemoteClean';        Tag = 'network' }
 )
 
 function Invoke-OneStep ($step) {
