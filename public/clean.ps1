@@ -114,7 +114,7 @@ Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer
 Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowSuperHidden' 1
 
 Step 'Restoring the classic right-click context menu'
-reg add 'HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' /f /ve 2>&1 | Out-Null
+cmd /c 'reg add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve >nul 2>&1'
 
 Step "Pinning your home folder ($HOME) to the sidebar"
 $clsid   = '{59031a47-3f72-44a7-89c5-5595fe6b30ee}'
@@ -306,13 +306,13 @@ foreach ($key in $cdm) {
 Step 'Removing the Win32 Copilot stub (if present)'
 if (Get-Command winget -ErrorAction SilentlyContinue) {
     # winget returns the uninstaller's own (often non-zero) exit code; we don't care.
-    winget uninstall --name 'Copilot' --silent --accept-source-agreements 2>&1 | Out-Null
+    cmd /c 'winget uninstall --name Copilot --silent --accept-source-agreements >nul 2>&1'
 } else {
     # Fallback: drive the ARP UninstallString directly.
     Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
                      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
         Where-Object DisplayName -match 'Copilot' |
-        ForEach-Object { if ($_.UninstallString) { cmd /c $_.UninstallString 2>&1 | Out-Null } }
+        ForEach-Object { if ($_.UninstallString) { cmd /c "$($_.UninstallString) >nul 2>&1" } }
 }
 
 Step 'Stopping the Store from auto-downloading apps'
@@ -357,9 +357,13 @@ Set-ItemProperty -Path 'HKCR:\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2E
 Remove-PSDrive 'HKCR' -ErrorAction SilentlyContinue
 
 Step 'Removing the OneDrive run hook for new users'
-reg load   'hku\Default' 'C:\Users\Default\NTUSER.DAT' 2>&1 | Out-Null
-reg delete 'HKEY_USERS\Default\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' /v 'OneDriveSetup' /f 2>&1 | Out-Null
-reg unload 'hku\Default' 2>&1 | Out-Null
+# reg.exe reports routine not-found conditions on stderr, and a Stop-preference
+# caller (provision.ps1 embeds this script via iex) turns PowerShell-redirected
+# stderr into a terminating error. cmd-native redirection keeps it out of
+# PowerShell entirely - and guarantees the unload always runs.
+cmd /c 'reg load hku\Default C:\Users\Default\NTUSER.DAT >nul 2>&1'
+cmd /c 'reg delete "HKEY_USERS\Default\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v OneDriveSetup /f >nul 2>&1'
+cmd /c 'reg unload hku\Default >nul 2>&1'
 
 Step 'Removing the Start menu shortcut'
 Remove-Item -Force -ErrorAction SilentlyContinue "$env:userprofile\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk"
