@@ -254,14 +254,32 @@ $apps = @(
 )
 
 Step "Removing $($apps.Count) bundled apps"
-$provisioned = Get-AppxProvisionedPackage -Online
 foreach ($app in $apps) {
     Note "removing $app"
-    Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue |
-        Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    $provisioned |
-        Where-Object { $_.PackageName -like $app -or $_.DisplayName -like $app } |
-        Remove-AppxProvisionedPackage -Online -AllUsers -ErrorAction SilentlyContinue
+    try {
+        Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue |
+            Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    } catch {
+        # deployment errors here are terminating (which -ErrorAction can't
+        # suppress) and just mean absent/locked - fine either way
+    }
+}
+
+Step 'Removing the matching provisioned packages (new-user templates)'
+# Snapshot AFTER the removals above: on Windows 11, Remove-AppxPackage -AllUsers
+# also deprovisions, and feeding those now-stale entries to
+# Remove-AppxProvisionedPackage throws the terminating COMException
+# "The system cannot find the path specified".
+$provisioned = Get-AppxProvisionedPackage -Online
+foreach ($app in $apps) {
+    foreach ($pkg in @($provisioned | Where-Object { $_.PackageName -like $app -or $_.DisplayName -like $app })) {
+        Note "deprovisioning $($pkg.DisplayName)"
+        try {
+            $pkg | Remove-AppxProvisionedPackage -Online -AllUsers -ErrorAction Stop | Out-Null
+        } catch {
+            Warn "could not deprovision $($pkg.DisplayName): $($_.Exception.Message.Trim())"
+        }
+    }
 }
 
 Step 'Stopping the apps from re-installing themselves'
@@ -331,12 +349,12 @@ New-FolderForced -Path 'HKLM:\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\On
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\OneDrive' 'DisableFileSyncNGSC' 1
 
 Step 'Removing OneDrive from the Explorer sidebar'
-New-PSDrive -PSProvider 'Registry' -Root 'HKEY_CLASSES_ROOT' -Name 'HKCR' | Out-Null
+New-PSDrive -PSProvider 'Registry' -Root 'HKEY_CLASSES_ROOT' -Name 'HKCR' -ErrorAction SilentlyContinue | Out-Null
 New-FolderForced -Path 'HKCR:\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
 Set-ItemProperty -Path 'HKCR:\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}' 'System.IsPinnedToNameSpaceTree' 0
 New-FolderForced -Path 'HKCR:\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
 Set-ItemProperty -Path 'HKCR:\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}' 'System.IsPinnedToNameSpaceTree' 0
-Remove-PSDrive 'HKCR'
+Remove-PSDrive 'HKCR' -ErrorAction SilentlyContinue
 
 Step 'Removing the OneDrive run hook for new users'
 reg load   'hku\Default' 'C:\Users\Default\NTUSER.DAT' 2>&1 | Out-Null
