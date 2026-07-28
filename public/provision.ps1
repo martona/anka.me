@@ -344,8 +344,14 @@ function Invoke-RemoteClean {
 # the menu renders done/todo from this. Steps without a probe (rename, clean.ps1)
 # show no state. Probes run on every menu redraw - keep them read-only and fast.
 $checks = @{
-    # RPSessionInterval is the OS's own protection flag: 1 = SR on, 0 = off.
-    'Invoke-DisableRestore'     = { $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -ErrorAction SilentlyContinue).RPSessionInterval; if ($null -ne $v) { $v -eq 0 } }
+    # Done = protection flag off AND zero restore points actually on disk (both
+    # via WMI root/default, so it works in 5.1 and pwsh 7 alike). Note: a clean
+    # Windows install ships with System Protection OFF, so 'done' on a brand-new
+    # machine is expected, not a misread.
+    'Invoke-DisableRestore'     = { $cfg = Get-CimInstance -Namespace root/default -ClassName SystemRestoreConfig -ErrorAction SilentlyContinue
+                                    if (-not $cfg) { return $null }
+                                    if ($cfg.RPSessionInterval -ne 0) { return $false }
+                                    @(Get-CimInstance -Namespace root/default -ClassName SystemRestore -ErrorAction SilentlyContinue).Count -eq 0 }
     'Invoke-DisableHibernation' = { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -ErrorAction SilentlyContinue).HibernateEnabled -eq 0 }
     'Invoke-DisablePagefile'    = { -not (Get-CimInstance -ClassName Win32_ComputerSystem).AutomaticManagedPagefile -and -not (Get-CimInstance -ClassName Win32_PageFileSetting -ErrorAction SilentlyContinue) }
     'Invoke-ShareC'             = { [bool](Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq 'C:\' -and -not $_.Special }) }
