@@ -85,7 +85,7 @@ function Invoke-DisableRestore {
     }
     # Disabling protection does not reliably purge existing shadow copies
     # (restore points are VSS shadows on the system drive) - do it explicitly.
-    & vssadmin delete shadows /for=C: /all /quiet *> $null
+    cmd /c 'vssadmin delete shadows /for=C: /all /quiet >nul 2>&1'
     Done 'System Protection off; restore points cleared on C:\.'
 }
 
@@ -334,8 +334,10 @@ function Invoke-RemoteClean {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $src = Invoke-RestMethod -Uri 'https://anka.me/clean.ps1'
     if ($src -is [byte[]]) { $src = [Text.Encoding]::UTF8.GetString($src) }
-    # child scope, so clean.ps1's own helper functions can't clobber ours
-    & ([scriptblock]::Create($src))
+    # Child scope: clean.ps1's helper functions can't clobber ours, and it runs
+    # under its own default ErrorActionPreference - our 'Stop' would turn native
+    # stderr chatter (reg.exe and friends) into terminating errors mid-script.
+    & { $ErrorActionPreference = 'Continue'; & ([scriptblock]::Create($src)) }
     Done 'clean.ps1 finished.'
 }
 
