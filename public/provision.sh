@@ -513,7 +513,11 @@ while true; do
     read -r -p '  run which? ' choice </dev/tty
     choice="${choice// /}"
     case "$choice" in
-        q|quit|exit) echo; Done 'Bye.'; break ;;
+        # exit, not break: under curl | bash the script IS stdin, and after
+        # the loop bash would go back to the pipe for more script before
+        # quitting - which can block instead of seeing EOF. End the process
+        # right here.
+        q|quit|exit) echo; Done 'Bye.'; exit 0 ;;
         a|all)
             for s in "${STEPS[@]}"; do
                 IFS='|' read -r _key fn _title _tag <<<"$s"
