@@ -376,6 +376,26 @@ step_timezone () {
     fi
 }
 
+# 16) no swap - now and across reboots. The Linux sibling of the Windows
+#     pagefile step: swapoff, comment the fstab entries, delete the stock
+#     Ubuntu swapfile to get the disk back.
+step_swapoff () {
+    Step 'Disabling swap (now and across reboots)...'
+    run sudo swapoff -a
+    if grep -qE '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab; then
+        runsh "sudo sed -i -E 's|^([^#].*[[:space:]]swap[[:space:]])|# \1|' /etc/fstab"
+        Note 'Commented the swap entries in /etc/fstab.'
+    else
+        Note 'No active swap entries in /etc/fstab.'
+    fi
+    if [[ -f /swap.img ]]; then
+        run sudo rm -f /swap.img
+        Note 'Removed the stock /swap.img.'
+    fi
+    run sudo systemctl daemon-reload
+    Done 'Swap is off and stays off.'
+}
+
 # ---- cheap state probes ----------------------------------------------------
 # Echo done/todo, or nothing when it can't be told from here. Read-only,
 # they run on every menu redraw.
@@ -428,6 +448,9 @@ probe () {
             [[ -f /etc/systemd/journald.conf.d/99-volatile-journals.conf ]] && echo done || echo todo ;;
         step_timezone)
             [[ "$(timedatectl show -p Timezone --value 2>/dev/null)" == America/New_York ]] && echo done || echo todo ;;
+        step_swapoff)
+            if [[ -z "$(swapon --noheadings --show 2>/dev/null)" ]] \
+               && ! grep -qsE '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab; then echo done; else echo todo; fi ;;
         *) echo '' ;;
     esac
 }
@@ -450,6 +473,7 @@ STEPS=(
     '13|step_governor|CPU governor: powersave (or schedutil)|'
     '14|step_journals|Volatile journals (RAM only, saves rootfs writes)|'
     '15|step_timezone|Set the time zone to US Eastern|'
+    '16|step_swapoff|Disable swap (swapoff, fstab, removes /swap.img)|'
 )
 
 invoke_step () {
