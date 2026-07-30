@@ -3,7 +3,8 @@
   ---------------------------------------------------
   Run elevated (Windows PowerShell 5.1). With no args it shows a menu; with
   --all it runs every step in order, unattended. The rename step is menu-only
-  unless a new name is supplied with --name.
+  unless a new name is supplied with --name; the local-admin step is menu-only
+  (it always prompts for a name and password).
 
       powershell -ExecutionPolicy Bypass -File .\provision.ps1
       powershell -ExecutionPolicy Bypass -File .\provision.ps1 --all [--name NEWPC]
@@ -341,6 +342,52 @@ function Invoke-RemoteClean {
     Done 'clean.ps1 finished.'
 }
 
+# 15) create a local administrator account. Always prompts for the name and
+#     password, so it is menu-only (--all skips it).
+function Invoke-CreateAdmin {
+    Step 'Creating a local administrator account...'
+    $name = (Read-Host '    user name (Enter cancels)').Trim()
+    if (-not $name) { Note 'Cancelled.'; return }
+    if ($name -notmatch '^[A-Za-z0-9 ._-]{1,20}$') {
+        throw "'$name' is not a valid local user name (1-20 letters, digits, spaces, . _ -)."
+    }
+    if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) {
+        Warn "User '$name' already exists - leaving it alone."
+        return
+    }
+    $p1 = Read-Host '    password' -AsSecureString
+    if ($p1.Length -eq 0) { throw 'Password cannot be empty.' }
+    $p2 = Read-Host '    password (again)' -AsSecureString
+    # SecureStrings can't be compared directly - round-trip through BSTRs.
+    $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($p1)
+    $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($p2)
+    try {
+        $match = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b1) -ceq
+                 [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b2)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
+    }
+    if (-not $match) { throw 'Passwords do not match.' }
+    New-LocalUser -Name $name -Password $p1 -PasswordNeverExpires -AccountNeverExpires | Out-Null
+    # By SID, not by name - the Administrators group is localized on non-English Windows.
+    Add-LocalGroupMember -Group (Get-LocalGroup -SID 'S-1-5-32-544') -Member $name
+    Done "Created local administrator '$name' (password never expires)."
+}
+
+# 16) read-only: report the allocation unit (cluster) size of C:\.
+function Invoke-CheckClusterSize {
+    Step 'Checking the allocation unit size of C:\...'
+    $bs = (Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='C:'").BlockSize
+    if (-not $bs) { Warn 'Could not read the allocation unit size of C:\.'; return }
+    $kb = [int]($bs / 1KB)
+    if ($bs -ge 16KB) {
+        Done "C:\ allocation unit size: ${kb}K (16K or larger)."
+    } else {
+        Fail "C:\ allocation unit size: ${kb}K - smaller than 16K."
+    }
+}
+
 # ---- cheap state probes ----------------------------------------------------
 # Each probe returns $true when its step is already in the desired end state;
 # the menu renders done/todo from this. Steps without a probe (rename, clean.ps1)
@@ -367,6 +414,10 @@ $checks = @{
     'Invoke-DarkMode'           = { $p = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue; $p.AppsUseLightTheme -eq 0 -and $p.SystemUsesLightTheme -eq 0 }
     'Invoke-DarkReader'         = { $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist'; if (Test-Path $k) { [bool](@((Get-Item $k).Property | ForEach-Object { (Get-ItemProperty -Path $k -Name $_).$_ }) -match '^ifoakfbpdcdoeenechcleahebpibofpc') } else { $false } }
     'Invoke-TimeZone'           = { (Get-TimeZone).Id -eq 'Eastern Standard Time' }
+    # read-only test: green (ok) at 16K clusters or larger, red (FAIL) below.
+    'Invoke-CheckClusterSize'   = { $bs = (Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='C:'").BlockSize
+                                    if (-not $bs) { return $null }
+                                    $bs -ge 16KB }
 }
 
 # ---- catalog ---------------------------------------------------------------
@@ -385,6 +436,8 @@ $steps = @(
     [pscustomobject]@{ Key = '12'; Title = 'Set the time zone to US Eastern';                        Fn = 'Invoke-TimeZone';           Tag = '' }
     [pscustomobject]@{ Key = '13'; Title = 'Rename this computer (asks for the new name)';           Fn = 'Invoke-Rename';             Tag = 'reboot' }
     [pscustomobject]@{ Key = '14'; Title = 'Run clean.ps1 (debloat) from https://anka.me';           Fn = 'Invoke-RemoteClean';        Tag = 'network' }
+    [pscustomobject]@{ Key = '15'; Title = 'Create a local administrator user (asks name + password)'; Fn = 'Invoke-CreateAdmin';      Tag = '' }
+    [pscustomobject]@{ Key = '16'; Title = 'Check C:\ allocation unit size (want 16K or larger)';    Fn = 'Invoke-CheckClusterSize';   Tag = 'check' }
 )
 
 function Invoke-OneStep ($step) {
@@ -407,6 +460,11 @@ if ($All) {
         if ($s.Fn -eq 'Invoke-Rename' -and -not $NewName) {
             Write-Host ''
             Note 'Skipping the rename step (no --name given).'
+            continue
+        }
+        if ($s.Fn -eq 'Invoke-CreateAdmin') {
+            Write-Host ''
+            Note 'Skipping the local admin step (interactive only - run it from the menu).'
             continue
         }
         Invoke-OneStep $s
@@ -432,13 +490,17 @@ while ($true) {
             } catch { $state = '' }
         }
         Write-Host "  [$($s.Key.PadLeft(2))] " -ForegroundColor Cyan -NoNewline
-        if     ($state -eq 'done') { Write-Host 'done  ' -ForegroundColor DarkGreen -NoNewline }
+        # 'check' steps are read-only tests: pass renders green, fail renders red.
+        if     ($state -eq 'done' -and $s.Tag -eq 'check') { Write-Host 'ok    ' -ForegroundColor Green -NoNewline }
+        elseif ($state -eq 'todo' -and $s.Tag -eq 'check') { Write-Host 'FAIL  ' -ForegroundColor Red   -NoNewline }
+        elseif ($state -eq 'done') { Write-Host 'done  ' -ForegroundColor DarkGreen -NoNewline }
         elseif ($state -eq 'todo') { Write-Host 'todo  ' -ForegroundColor Yellow    -NoNewline }
         else                       { Write-Host '      '                            -NoNewline }
         Write-Host $s.Title -ForegroundColor $(if ($state -eq 'done') { 'DarkGray' } else { 'White' }) -NoNewline
         if ($s.Tag -eq 'destructive') { Write-Host '  (destructive)' -ForegroundColor Red -NoNewline }
         elseif ($s.Tag -eq 'reboot')  { Write-Host '  (reboot)'      -ForegroundColor Yellow -NoNewline }
         elseif ($s.Tag -eq 'network') { Write-Host '  (network)'     -ForegroundColor DarkGray -NoNewline }
+        elseif ($s.Tag -eq 'check')   { Write-Host '  (read-only)'   -ForegroundColor DarkGray -NoNewline }
         Write-Host ''
     }
     Write-Host '  [ a] ' -ForegroundColor Cyan -NoNewline; Write-Host '      run all' -ForegroundColor White
