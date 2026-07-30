@@ -170,6 +170,29 @@
 
         <article class="script">
           <div class="script-head">
+            <svg class="os-ic" aria-hidden="true" focusable="false"><use href="#i-linux"></use></svg>
+            <span class="script-name">provision a fresh box</span>
+            <span class="os-tag">Linux</span>
+            <a class="view" href="https://anka.me/provision.sh">provision.sh<svg class="ic-ext" aria-hidden="true" focusable="false"><use href="#i-ext"></use></svg></a>
+          </div>
+          <div class="cmd-box">
+            <code class="cmd-text"><span class="cmd-prompt">$</span> curl -fsSL https://anka.me/provision.sh | bash</code>
+            <button type="button" class="cmd-copy" data-copy="curl -fsSL https://anka.me/provision.sh | bash" aria-label="Copy menu command">
+              <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
+              <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
+            </button>
+          </div>
+          <div class="cmd-box">
+            <code class="cmd-text"><span class="cmd-prompt">$</span> curl -fsSL https://anka.me/provision.sh | bash -s -- --all</code>
+            <button type="button" class="cmd-copy" data-copy="curl -fsSL https://anka.me/provision.sh | bash -s -- --all" aria-label="Copy unattended command">
+              <svg class="ti-copy" aria-hidden="true" focusable="false"><use href="#i-copy"></use></svg>
+              <svg class="ti-check" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg>
+            </button>
+          </div>
+        </article>
+
+        <article class="script">
+          <div class="script-head">
             <svg class="os-ic" aria-hidden="true" focusable="false"><use href="#i-windows"></use></svg>
             <span class="script-name">debloat &amp; harden windows</span>
             <span class="os-tag">Windows</span>

@@ -1,0 +1,4 @@
+# shell scripts are served to Linux boxes verbatim - CRLF would break them
+*.sh text eol=lf
+# powershell scripts stay CRLF (WinPS 5.1 targets)
+*.ps1 text eol=crlf
