@@ -402,9 +402,9 @@ step_swapoff () {
 probe () {
     case "$1" in
         step_sudo_nopasswd)
-            # existence only: sudo -n true would false-positive inside the
-            # 15-minute credential cache window
-            [[ -e "/etc/sudoers.d/99-${USER}-nopasswd" ]] && echo done || echo todo ;;
+            # live test; -k makes sudo ignore (not clear) the 15-minute
+            # credential cache, so this only passes on real NOPASSWD
+            sudo -k -n true 2>/dev/null && echo done || echo todo ;;
         step_packages)
             local p
             for p in "${PKGS[@]}"; do
@@ -420,8 +420,16 @@ probe () {
         step_ecc)
             [[ -e /sys/devices/system/edac/mc/mc0 ]] && echo done || echo todo ;;
         step_tcp)
-            if [[ -f /etc/sysctl.d/99-fast-long-fat-tcp.conf ]] \
-               && [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" == bbr ]]; then echo done; else echo todo; fi ;;
+            # judge by live kernel values, not our conf file - the tuning
+            # may have arrived by other means
+            local cc rmax wmax rbuf wbuf
+            cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+            rmax=$(sysctl -n net.core.rmem_max 2>/dev/null)
+            wmax=$(sysctl -n net.core.wmem_max 2>/dev/null)
+            rbuf=$(sysctl -n net.ipv4.tcp_rmem 2>/dev/null | awk '{print $3}')
+            wbuf=$(sysctl -n net.ipv4.tcp_wmem 2>/dev/null | awk '{print $3}')
+            if [[ "$cc" == bbr && "${rmax:-0}" -ge 67108864 && "${wmax:-0}" -ge 67108864 \
+                  && "${rbuf:-0}" -ge 67108864 && "${wbuf:-0}" -ge 67108864 ]]; then echo done; else echo todo; fi ;;
         step_atuin)
             if command -v atuin >/dev/null || [[ -x "$HOME/.atuin/bin/atuin" ]]; then echo done; else echo todo; fi ;;
         step_sshkey)
@@ -429,16 +437,21 @@ probe () {
         step_yadm)
             [[ -d "$HOME/.local/share/yadm/repo.git" ]] && echo done || echo todo ;;
         step_pkg0)
-            local t
-            for t in pkg0 cosign clipp yo topgrade; do
-                command -v "$t" >/dev/null || { echo todo; return; }
-            done
-            echo done ;;
+            # pkg0 on the path is the signal; the tools it installs may
+            # live outside this user's PATH
+            command -v pkg0 >/dev/null && echo done || echo todo ;;
         step_clevis)
-            # needs root to inspect the LUKS header; only answer when
-            # passwordless sudo is up and the default device exists
-            if [[ ! -e /dev/zd0 ]] || ! sudo -n true 2>/dev/null; then echo ''; return; fi
-            sudo -n clevis luks list -d /dev/zd0 2>/dev/null | grep -q tpm2 && echo done || echo todo ;;
+            # needs root to inspect LUKS headers; only answer when
+            # passwordless sudo is up. Any clevis binding on any LUKS
+            # device counts as done.
+            sudo -n true 2>/dev/null || { echo ''; return; }
+            local d devs
+            devs=$(lsblk -prno PATH,FSTYPE 2>/dev/null | awk '$2=="crypto_LUKS"{print $1}')
+            [[ -z "$devs" ]] && { echo ''; return; }
+            for d in $devs; do
+                if [[ -n "$(sudo -n clevis luks list -d "$d" 2>/dev/null)" ]]; then echo done; return; fi
+            done
+            echo todo ;;
         step_zfskeys)
             command -v zfs >/dev/null || { echo ''; return; }
             systemctl is-enabled 99-zfs-load-key.service >/dev/null 2>&1 && echo done || echo todo ;;
