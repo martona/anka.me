@@ -381,12 +381,15 @@ step_timezone () {
 #     Ubuntu swapfile to get the disk back.
 step_swapoff () {
     Step 'Disabling swap (now and across reboots)...'
-    run sudo swapoff -a
-    if grep -qE '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab; then
-        runsh "sudo sed -i -E 's|^([^#].*[[:space:]]swap[[:space:]])|# \1|' /etc/fstab"
+    # not swapoff -a: that also walks fstab, errors on a dangling entry
+    # (swapfile already deleted), and set -e would kill the step. Only
+    # turn off what is actually swapped in.
+    runsh 'swapon --noheadings --show=NAME | xargs -r sudo swapoff'
+    if grep -qE '^[[:space:]]*[^#[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+swap[[:space:]]' /etc/fstab; then
+        runsh "sudo sed -i -E 's|^[[:space:]]*[^#[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+swap[[:space:]].*|# &|' /etc/fstab"
         Note 'Commented the swap entries in /etc/fstab.'
     else
-        Note 'No active swap entries in /etc/fstab.'
+        Note 'No swap entries to comment in /etc/fstab.'
     fi
     if [[ -f /swap.img ]]; then
         run sudo rm -f /swap.img
@@ -462,8 +465,19 @@ probe () {
         step_timezone)
             [[ "$(timedatectl show -p Timezone --value 2>/dev/null)" == America/New_York ]] && echo done || echo todo ;;
         step_swapoff)
-            if [[ -z "$(swapon --noheadings --show 2>/dev/null)" ]] \
-               && ! grep -qsE '^[^#].*[[:space:]]swap[[:space:]]' /etc/fstab; then echo done; else echo todo; fi ;;
+            # done = nothing swapped in now, and no fstab entry that could
+            # bring swap back at boot: uncommented, type swap, and a source
+            # that still exists (a dangling /swap.img line can't fire)
+            local src armed=""
+            while read -r src; do
+                case "$src" in
+                    UUID=*)     src="/dev/disk/by-uuid/${src#UUID=}" ;;
+                    LABEL=*)    src="/dev/disk/by-label/${src#LABEL=}" ;;
+                    PARTUUID=*) src="/dev/disk/by-partuuid/${src#PARTUUID=}" ;;
+                esac
+                [[ -e "$src" ]] && armed=1
+            done < <(awk '$1 !~ /^#/ && $3 == "swap" {print $1}' /etc/fstab 2>/dev/null)
+            if [[ -z "$armed" && -z "$(swapon --noheadings --show 2>/dev/null)" ]]; then echo done; else echo todo; fi ;;
         *) echo '' ;;
     esac
 }
