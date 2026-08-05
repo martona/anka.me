@@ -271,11 +271,21 @@ step_pkg0 () {
 }
 
 # 11) clevis TPM2 bind for the LUKS keystore; optionally rotate the
-#     keystore passphrase afterwards. Both cryptsetup prompts are theirs,
-#     not ours.
+#     keystore passphrase afterwards. Both passphrase prompts are theirs,
+#     not ours, but they must be pointed at /dev/tty: under curl | bash
+#     stdin is the script itself, and clevis's plain read would silently
+#     eat the rest of it as the "passphrase".
 step_clevis () {
     Step 'Binding the LUKS keystore to the TPM (clevis)...'
-    run sudo apt -y install clevis clevis-tpm2 clevis-luks clevis-dracut tpm2-tools
+    # match the box's initrd generator: dracut (default from Ubuntu 26.04)
+    # gets clevis-dracut, an initramfs-tools box gets clevis-initramfs -
+    # the wrong one is missing or drags in the other generator
+    local initpkg=clevis-dracut
+    if ! command -v dracut >/dev/null \
+       && dpkg-query -W -f'${Status}' initramfs-tools 2>/dev/null | grep -q 'install ok installed'; then
+        initpkg=clevis-initramfs
+    fi
+    run sudo apt -y install clevis clevis-tpm2 clevis-luks "$initpkg" tpm2-tools
     local dev
     ask dev 'LUKS device [/dev/zd0]: '
     dev="${dev:-/dev/zd0}"
@@ -284,13 +294,13 @@ step_clevis () {
         Note "$dev already has a tpm2 binding."
     else
         Note 'clevis will ask for the existing LUKS passphrase.'
-        run sudo clevis luks bind -d "$dev" tpm2 '{"pcr_bank":"sha256","pcr_ids":"0,2,4,7,14"}'
+        run sudo clevis luks bind -d "$dev" tpm2 '{"pcr_bank":"sha256","pcr_ids":"0,2,4,7,14"}' </dev/tty
     fi
     local yn
     ask yn 'also rotate the keystore passphrase (cryptsetup luksChangeKey)? [y/N]: '
     if [[ "$yn" =~ ^[Yy]$ ]]; then
         if [[ -e /dev/zvol/rpool/keystore ]]; then
-            run sudo cryptsetup luksChangeKey /dev/zvol/rpool/keystore
+            run sudo cryptsetup luksChangeKey /dev/zvol/rpool/keystore </dev/tty
         else
             Warn '/dev/zvol/rpool/keystore does not exist - skipping the rotate.'
         fi
@@ -326,20 +336,23 @@ EOF
     Done 'ZFS keys autoload at boot.'
 }
 
-# 13) CPU governor at boot: powersave where the driver offers it, else
-#     schedutil (acpi-cpufreq/amd systems). Writes sysfs directly, so no
+# 13) CPU governor at boot: schedutil where the driver offers it (ramps
+#     under load, minimal otherwise), else powersave - which only remains
+#     on intel_pstate/amd-pstate active mode, where powersave IS the
+#     dynamic governor. Never pick powersave on acpi-cpufreq: there it
+#     pins every core to minimum frequency. Writes sysfs directly, so no
 #     cpupower/linux-tools dependency; $$ is systemd's escape for $.
 step_governor () {
-    Step 'Installing the CPU governor unit (powersave, else schedutil)...'
+    Step 'Installing the CPU governor unit (schedutil, else powersave)...'
     write_root_file /etc/systemd/system/99-powersave-governor.service <<'EOF'
 [Unit]
-Description=Set CPU governor to powersave (or schedutil)
+Description=Set CPU governor to schedutil (or powersave)
 After=multi-user.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'g=powersave; grep -qw powersave /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null || g=schedutil; for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do [ -e "$$f" ] && echo "$$g" > "$$f"; done; exit 0'
+ExecStart=/bin/sh -c 'g=schedutil; grep -qw schedutil /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null || g=powersave; for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do [ -e "$$f" ] && echo "$$g" > "$$f"; done; exit 0'
 
 [Install]
 WantedBy=multi-user.target
@@ -459,7 +472,15 @@ probe () {
             command -v zfs >/dev/null || { echo ''; return; }
             systemctl is-enabled 99-zfs-load-key.service >/dev/null 2>&1 && echo done || echo todo ;;
         step_governor)
-            systemctl is-enabled 99-powersave-governor.service >/dev/null 2>&1 && echo done || echo todo ;;
+            # enabled is not enough: an older unit preferred powersave even
+            # on acpi-cpufreq (pinned to min freq). Judge by the live
+            # governor vs what the current logic would pick.
+            systemctl is-enabled 99-powersave-governor.service >/dev/null 2>&1 || { echo todo; return; }
+            local pol=/sys/devices/system/cpu/cpufreq/policy0 want
+            [[ -e "$pol/scaling_governor" ]] || { echo done; return; }  # no cpufreq (vm) - unit is harmless
+            want=schedutil
+            grep -qw schedutil "$pol/scaling_available_governors" 2>/dev/null || want=powersave
+            [[ "$(cat "$pol/scaling_governor" 2>/dev/null)" == "$want" ]] && echo done || echo todo ;;
         step_journals)
             [[ -f /etc/systemd/journald.conf.d/99-volatile-journals.conf ]] && echo done || echo todo ;;
         step_timezone)
@@ -497,7 +518,7 @@ STEPS=(
     '10|step_pkg0|pkg0 + cosign, clipp, yo, topgrade|'
     '11|step_clevis|clevis: bind LUKS keystore to TPM2|interactive'
     '12|step_zfskeys|ZFS: autoload encryption keys at boot|'
-    '13|step_governor|CPU governor: powersave (or schedutil)|'
+    '13|step_governor|CPU governor: schedutil (or powersave)|'
     '14|step_journals|Volatile journals (RAM only, saves rootfs writes)|'
     '15|step_timezone|Set the time zone to US Eastern|'
     '16|step_swapoff|Disable swap (swapoff, fstab, removes /swap.img)|'
