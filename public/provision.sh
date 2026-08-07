@@ -358,7 +358,11 @@ ExecStart=/bin/sh -c 'g=schedutil; grep -qw schedutil /sys/devices/system/cpu/cp
 WantedBy=multi-user.target
 EOF
     run sudo systemctl daemon-reload
-    run sudo systemctl enable --now 99-powersave-governor.service
+    # enable + restart, not enable --now: on a re-run the oneshot is
+    # already active (RemainAfterExit), and starting an active unit is a
+    # no-op - restart actually re-executes ExecStart
+    run sudo systemctl enable 99-powersave-governor.service
+    run sudo systemctl restart 99-powersave-governor.service
     runsh "cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null || echo 'no cpufreq here (vm?)'"
     Done 'Governor unit installed and started.'
 }
