@@ -122,6 +122,7 @@ function Invoke-DisablePagefile {
 }
 
 # 4) share C:\ as "C", full control for the current user only, if not already shared.
+#    Also opens the firewall for inbound SMB (TCP 445) - a share is useless without it.
 function Invoke-ShareC {
     Step 'Sharing C:\ over SMB as "C"...'
     $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -138,6 +139,11 @@ function Invoke-ShareC {
         New-SmbShare -Name 'C' -Path 'C:\' -FullAccess $me | Out-Null
         Done "Shared C:\ as 'C' with Full Control for $me (and no one else)."
     }
+    # 'FPS-SMB-In-TCP*' is the locale-independent name of the 'File and Printer
+    # Sharing (SMB-In)' rules (the -NoScope variant covers the Domain profile);
+    # enable them even if the share already existed.
+    Enable-NetFirewallRule -Name 'FPS-SMB-In-TCP*' -ErrorAction SilentlyContinue | Out-Null
+    Done 'Firewall opened for inbound SMB (TCP 445).'
 }
 
 # 5) Edge: skip the first-run wizard, disable startup boost.
