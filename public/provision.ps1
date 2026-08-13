@@ -3,8 +3,8 @@
   ---------------------------------------------------
   Run elevated (Windows PowerShell 5.1). With no args it shows a menu; with
   --all it runs every step in order, unattended. The rename step is menu-only
-  unless a new name is supplied with --name; the local-admin step is menu-only
-  (it always prompts for a name and password).
+  unless a new name is supplied with --name; the local-admin and .ssh-copy
+  steps are menu-only (they always prompt).
 
       powershell -ExecutionPolicy Bypass -File .\provision.ps1
       powershell -ExecutionPolicy Bypass -File .\provision.ps1 --all [--name NEWPC]
@@ -16,7 +16,8 @@
 
   Most steps need administrator rights (the cert, execution-policy and dark
   mode steps are per-user), but the script requires elevation overall.
-  DESTRUCTIVE: deletes restore points and removes the pagefile.
+  DESTRUCTIVE: deletes restore points, removes the pagefile, and the yadm
+  step hard-resets local dotfiles to origin/master.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -394,6 +395,122 @@ function Invoke-CheckClusterSize {
     }
 }
 
+# 17) copy .ssh\config and the private key from another machine over SMB
+#     (the other machine shares C:\ as 'C', i.e. ran step 4). Prompts for the
+#     host name, so it is menu-only (--all skips it).
+function Invoke-CopySsh {
+    Step 'Copying .ssh\config and .ssh\default from another host...'
+    $remote = (Read-Host '    host name to copy from (Enter cancels)').Trim()
+    if (-not $remote) { Note 'Cancelled.'; return }
+    $src = "\\$remote\C\Users\$env:USERNAME\.ssh"
+    $dst = Join-Path $HOME '.ssh'
+    if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst | Out-Null }
+    $failed = $false
+    foreach ($f in 'config', 'default') {
+        try {
+            Copy-Item -Path (Join-Path $src $f) -Destination (Join-Path $dst $f) -Force
+            Done "$src\$f -> $dst\$f"
+        } catch {
+            $failed = $true
+            Fail "Could not copy ${f}: $($_.Exception.Message)"
+        }
+    }
+    if ($failed) { Warn "Check that '$remote' is up, shares C:\ as 'C' (step 4), and has the files." }
+}
+
+# 18) install the standard tool set with winget.
+function Invoke-InstallSoftware {
+    Step 'Installing software with winget...'
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Fail 'winget is not available - install "App Installer" from the Microsoft Store first.'
+        return
+    }
+    $ids = @(
+        'Git.Git'
+        'Microsoft.PowerShell'
+        'atuinsh.atuin'
+        'martona.yo'
+        'martona.clipp'
+        'martona.wm_night'
+    )
+    foreach ($id in $ids) {
+        Note "installing $id..."
+        & winget install --id $id --exact --silent --accept-source-agreements --accept-package-agreements
+        # 0x8A15002B = no applicable upgrade, 0x8A15010B = already installed:
+        # both mean the package is present and current.
+        if ($LASTEXITCODE -eq 0) { Done "$id installed." }
+        elseif ($LASTEXITCODE -in -1978335189, -1978335061) { Note "$id is already installed." }
+        else { Fail "$id failed (winget exit code $LASTEXITCODE)." }
+    }
+    Note 'New PATH entries take effect in new shells (this session keeps its old PATH).'
+}
+
+# 19) install yadm from the PowerShell Gallery, then clone the dotfiles repo.
+#     Local dotfiles lose: ends with a hard reset to origin/master, which is
+#     simpler than sorting out clone-checkout conflicts and gives the same result.
+function Invoke-Yadm {
+    Step 'Installing yadm and cloning dotfiles-win...'
+    # Pick up PATH changes from the software install step (winget edits the
+    # registry PATH; this session's copy is stale until refreshed).
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Fail 'git not found - run the install software step first.'
+        return
+    }
+    $yadm = Join-Path $env:ProgramFiles 'WindowsPowerShell\Scripts\yadm.ps1'
+    if (Test-Path $yadm) {
+        Note 'yadm is already installed.'
+    } else {
+        # A fresh 5.1 box would prompt to bootstrap the NuGet provider mid-install;
+        # do it explicitly instead.
+        if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+            Note 'Installing the NuGet package provider...'
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        }
+        Note 'Installing the yadm script from the PowerShell Gallery...'
+        Install-Script -Name yadm -Force
+        if (-not (Test-Path $yadm)) { Fail "Install-Script ran but '$yadm' is missing."; return }
+    }
+    # git chatters on stderr and yadm may emit non-terminating errors; keep those
+    # from becoming terminating under our script-wide 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    # accept-new: take github.com's host key on first contact instead of
+    # stalling on the interactive fingerprint prompt.
+    $env:GIT_SSH_COMMAND = 'ssh -o StrictHostKeyChecking=accept-new'
+    try {
+        $repo = Join-Path $HOME '.local\share\yadm\repo.git'
+        if (-not (Test-Path $repo)) {
+            # Checkout conflicts with existing local files are fine - the hard
+            # reset below clobbers them either way.
+            & $yadm clone git@github.com:martona/dotfiles-win
+            if (-not (Test-Path $repo)) {
+                Fail 'yadm clone failed - is the ssh key in place (the .ssh copy step)?'
+                return
+            }
+        }
+        & $yadm fetch --all
+        & $yadm reset --hard origin/master
+        if ($LASTEXITCODE -ne 0) { Fail "yadm reset exited with code $LASTEXITCODE."; return }
+        Done 'dotfiles checked out at origin/master.'
+    } finally {
+        Remove-Item Env:\GIT_SSH_COMMAND -ErrorAction SilentlyContinue
+    }
+}
+
+# 20) update everything winget knows about. Perennial - no done/todo state.
+function Invoke-WingetUpdate {
+    Step 'Updating all winget packages...'
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Fail 'winget is not available - install "App Installer" from the Microsoft Store first.'
+        return
+    }
+    & winget upgrade --all --silent --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -eq 0) { Done 'All packages up to date.' }
+    elseif ($LASTEXITCODE -eq -1978335189) { Note 'Nothing to update.' }   # 0x8A15002B
+    else { Fail "winget upgrade exited with code $LASTEXITCODE." }
+}
+
 # ---- cheap state probes ----------------------------------------------------
 # Each probe returns $true when its step is already in the desired end state;
 # the menu renders done/todo from this. Steps without a probe (rename, clean.ps1)
@@ -424,6 +541,9 @@ $checks = @{
     'Invoke-CheckClusterSize'   = { $bs = (Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='C:'").BlockSize
                                     if (-not $bs) { return $null }
                                     $bs -ge 16KB }
+    'Invoke-CopySsh'            = { (Test-Path (Join-Path $HOME '.ssh\config')) -and (Test-Path (Join-Path $HOME '.ssh\default')) }
+    # winget install/update have no cheap probe (winget list is seconds-slow) - no state shown.
+    'Invoke-Yadm'               = { Test-Path (Join-Path $HOME '.local\share\yadm\repo.git') }
 }
 
 # ---- catalog ---------------------------------------------------------------
@@ -444,6 +564,10 @@ $steps = @(
     [pscustomobject]@{ Key = '14'; Title = 'Run clean.ps1 (debloat) from https://anka.me';           Fn = 'Invoke-RemoteClean';        Tag = 'network' }
     [pscustomobject]@{ Key = '15'; Title = 'Create a local administrator user (asks name + password)'; Fn = 'Invoke-CreateAdmin';      Tag = '' }
     [pscustomobject]@{ Key = '16'; Title = 'Check C:\ allocation unit size (want 16K or larger)';    Fn = 'Invoke-CheckClusterSize';   Tag = 'check' }
+    [pscustomobject]@{ Key = '17'; Title = 'Copy .ssh config + key from another host (asks host)';   Fn = 'Invoke-CopySsh';            Tag = 'network' }
+    [pscustomobject]@{ Key = '18'; Title = 'Install software: git, pwsh, atuin, yo, clipp, wm_night'; Fn = 'Invoke-InstallSoftware';   Tag = 'network' }
+    [pscustomobject]@{ Key = '19'; Title = 'Install yadm + clone dotfiles (hard reset to origin)';   Fn = 'Invoke-Yadm';               Tag = 'network' }
+    [pscustomobject]@{ Key = '20'; Title = 'Update all winget packages (winget upgrade --all)';      Fn = 'Invoke-WingetUpdate';       Tag = 'network' }
 )
 
 function Invoke-OneStep ($step) {
@@ -471,6 +595,11 @@ if ($All) {
         if ($s.Fn -eq 'Invoke-CreateAdmin') {
             Write-Host ''
             Note 'Skipping the local admin step (interactive only - run it from the menu).'
+            continue
+        }
+        if ($s.Fn -eq 'Invoke-CopySsh') {
+            Write-Host ''
+            Note 'Skipping the .ssh copy step (interactive only - run it from the menu).'
             continue
         }
         Invoke-OneStep $s
