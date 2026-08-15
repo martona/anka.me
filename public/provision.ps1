@@ -17,7 +17,7 @@
   Most steps need administrator rights (the cert, execution-policy and dark
   mode steps are per-user), but the script requires elevation overall.
   DESTRUCTIVE: deletes restore points, removes the pagefile, and the yadm
-  step hard-resets local dotfiles to origin/master.
+  step hard-resets local dotfiles to the remote's default branch.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -425,13 +425,14 @@ function Invoke-InstallSoftware {
         Fail 'winget is not available - install "App Installer" from the Microsoft Store first.'
         return
     }
+    # --exact matches IDs case-SENSITIVELY - use the casing 'winget search' shows.
     $ids = @(
         'Git.Git'
         'Microsoft.PowerShell'
-        'atuinsh.atuin'
+        'Atuinsh.Atuin'
         'martona.yo'
         'martona.clipp'
-        'martona.wm_night'
+        'martona.WM_NIGHT'
     )
     foreach ($id in $ids) {
         Note "installing $id..."
@@ -446,8 +447,9 @@ function Invoke-InstallSoftware {
 }
 
 # 19) install yadm from the PowerShell Gallery, then clone the dotfiles repo.
-#     Local dotfiles lose: ends with a hard reset to origin/master, which is
-#     simpler than sorting out clone-checkout conflicts and gives the same result.
+#     Local dotfiles lose: ends with a hard reset to the remote's default
+#     branch tip, which is simpler than sorting out clone-checkout conflicts
+#     and gives the same result.
 function Invoke-Yadm {
     Step 'Installing yadm and cloning dotfiles-win...'
     # Pick up PATH changes from the software install step (winget edits the
@@ -489,10 +491,15 @@ function Invoke-Yadm {
                 return
             }
         }
-        & $yadm fetch --all
-        & $yadm reset --hard origin/master
+        # yadm.ps1 clones with --bare, so the repo has no fetch refspec and
+        # origin/<branch> refs never exist. Fetching 'origin' grabs the remote's
+        # default branch tip into FETCH_HEAD - reset to that instead; it is the
+        # same commit origin/main would name, and survives branch renames too.
+        & $yadm fetch origin
+        if ($LASTEXITCODE -ne 0) { Fail "yadm fetch exited with code $LASTEXITCODE."; return }
+        & $yadm reset --hard FETCH_HEAD
         if ($LASTEXITCODE -ne 0) { Fail "yadm reset exited with code $LASTEXITCODE."; return }
-        Done 'dotfiles checked out at origin/master.'
+        Done "dotfiles checked out at the remote's default branch tip."
     } finally {
         Remove-Item Env:\GIT_SSH_COMMAND -ErrorAction SilentlyContinue
     }
