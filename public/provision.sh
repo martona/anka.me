@@ -319,7 +319,6 @@ step_zfskeys () {
     write_root_file /etc/systemd/system/99-zfs-load-key.service <<'EOF'
 [Unit]
 Description=Force ZFS Key Load
-DefaultDependencies=no
 After=zfs-import.target
 Before=zfs-mount.service
 
