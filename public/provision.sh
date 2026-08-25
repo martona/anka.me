@@ -420,6 +420,16 @@ step_swapoff () {
 #     coreutils, then pin uutils out so nothing reinstalls it. Both packages
 #     provide 'coreutils', so this is a single apt transaction - but it does
 #     briefly replace ls/cp/mv/rm in place, so it must not be interrupted.
+#
+#     Wrinkle: 26.04's build-essential hard-depends on coreutils-from-uutils
+#     by name (LP won't-fix, "supported build environment"), so the swap
+#     evicts it and the pin blocks reinstall. Cure: an empty equivs dummy
+#     named coreutils-from-uutils (1:999, no files, no Provides/Conflicts)
+#     satisfies the name, then build-essential goes back on. Cost: the dpkg
+#     db claims uutils while GNU runs - fine unless this box builds debs.
+#     ORDER MATTERS: the dummy may only go in AFTER the swap - dpkg -i over
+#     the real package would "upgrade" it to an empty file list, deleting
+#     every coreutils binary in /usr/bin with nothing behind it.
 step_gnu_coreutils () {
     Step 'Replacing rust/uutils coreutils with GNU coreutils...'
     if ! apt-cache show coreutils-from-gnu >/dev/null 2>&1; then
@@ -432,15 +442,48 @@ step_gnu_coreutils () {
         Warn 'Do NOT interrupt the next command - it swaps the core utilities in place.'
         run sudo apt -y --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils-
     fi
-    # negative pin: apt will never pick uutils again, not even on release
-    # upgrades. A package hard-depending on coreutils-from-uutils (unlikely)
-    # would become uninstallable rather than dragging it back in.
+    # negative pin: apt will never pick the real uutils again, not even on
+    # release upgrades. The epoch on the dummy below outranks any archive
+    # version on top of that - belt and suspenders.
     write_root_file /etc/apt/preferences.d/99-disable-uutils <<'EOF'
 Package: coreutils-from-uutils
 Pin: release *
 Pin-Priority: -10
 EOF
-    Done 'GNU coreutils active; uutils pinned out.'
+    if dpkg-query -W -f'${Status} ${Version}' coreutils-from-uutils 2>/dev/null | grep -q '^install ok installed 1:999$'; then
+        Note 'dummy coreutils-from-uutils (1:999) is already installed.'
+    else
+        # the safety catch for the ORDER MATTERS note above: never lay the
+        # dummy over a still-installed real uutils package
+        if dpkg-query -W -f'${Status}' coreutils-from-uutils 2>/dev/null | grep -q '^install ok installed$'; then
+            Fail 'Real coreutils-from-uutils is still installed - refusing to overwrite it with the dummy.'
+            return 1
+        fi
+        run sudo apt -y install equivs
+        local tmp
+        tmp=$(mktemp -d)
+        cat > "$tmp/control" <<'EOF'
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+Package: coreutils-from-uutils
+Version: 1:999
+Architecture: all
+Description: local dummy - this box runs GNU coreutils
+ Empty stand-in so build-essential (which hard-depends on the uutils
+ name) installs on a machine where coreutils-from-uutils was replaced
+ by coreutils-from-gnu. Ships no files on purpose. See the pin in
+ /etc/apt/preferences.d/99-disable-uutils.
+EOF
+        run cat "$tmp/control"
+        runsh "cd '$tmp' && equivs-build control"
+        run sudo dpkg -i "$tmp"/coreutils-from-uutils_*.deb
+        rm -rf "$tmp"
+    fi
+    # the swap evicted build-essential (it depends on the uutils name);
+    # with the dummy in place it installs cleanly again
+    run sudo apt -y install build-essential
+    Done 'GNU coreutils active; uutils pinned out; build-essential restored.'
 }
 
 # ---- cheap state probes ----------------------------------------------------
@@ -519,8 +562,13 @@ probe () {
         step_gnu_coreutils)
             # no state on releases without the coreutils-from-* split
             apt-cache show coreutils-from-gnu >/dev/null 2>&1 || { echo ''; return; }
+            # done = swapped + pinned + dummy at 1:999 + build-essential back;
+            # a half-done state (e.g. swapped but b-e still evicted) is todo
             if dpkg-query -W -f'${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed' \
-               && [[ -f /etc/apt/preferences.d/99-disable-uutils ]]; then echo done; else echo todo; fi ;;
+               && [[ -f /etc/apt/preferences.d/99-disable-uutils ]] \
+               && dpkg-query -W -f'${Status} ${Version}' coreutils-from-uutils 2>/dev/null | grep -q '^install ok installed 1:999$' \
+               && dpkg-query -W -f'${Status}' build-essential 2>/dev/null | grep -q 'install ok installed'; then
+                echo done; else echo todo; fi ;;
         step_swapoff)
             # done = nothing swapped in now, and no fstab entry that could
             # bring swap back at boot: uncommented, type swap, and a source
@@ -558,7 +606,7 @@ STEPS=(
     '14|step_journals|Volatile journals (RAM only, saves rootfs writes)|'
     '15|step_timezone|Set the time zone to US Eastern|'
     '16|step_swapoff|Disable swap (swapoff, fstab, removes /swap.img)|'
-    '17|step_gnu_coreutils|Swap uutils coreutils for GNU + pin uutils out|'
+    '17|step_gnu_coreutils|GNU coreutils: swap, pin out uutils, fix build-essential|'
 )
 
 invoke_step () {
