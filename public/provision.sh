@@ -416,6 +416,33 @@ step_swapoff () {
     Done 'Swap is off and stays off.'
 }
 
+# 17) swap the rust/uutils coreutils (default from Ubuntu 25.10) back to GNU
+#     coreutils, then pin uutils out so nothing reinstalls it. Both packages
+#     provide 'coreutils', so this is a single apt transaction - but it does
+#     briefly replace ls/cp/mv/rm in place, so it must not be interrupted.
+step_gnu_coreutils () {
+    Step 'Replacing rust/uutils coreutils with GNU coreutils...'
+    if ! apt-cache show coreutils-from-gnu >/dev/null 2>&1; then
+        Note 'No coreutils-from-gnu package on this release - nothing to do.'
+        return 0
+    fi
+    if dpkg-query -W -f'${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed'; then
+        Note 'GNU coreutils is already installed.'
+    else
+        Warn 'Do NOT interrupt the next command - it swaps the core utilities in place.'
+        run sudo apt -y --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils-
+    fi
+    # negative pin: apt will never pick uutils again, not even on release
+    # upgrades. A package hard-depending on coreutils-from-uutils (unlikely)
+    # would become uninstallable rather than dragging it back in.
+    write_root_file /etc/apt/preferences.d/99-disable-uutils <<'EOF'
+Package: coreutils-from-uutils
+Pin: release *
+Pin-Priority: -10
+EOF
+    Done 'GNU coreutils active; uutils pinned out.'
+}
+
 # ---- cheap state probes ----------------------------------------------------
 # Echo done/todo, or nothing when it can't be told from here. Read-only,
 # they run on every menu redraw.
@@ -489,6 +516,11 @@ probe () {
             [[ -f /etc/systemd/journald.conf.d/99-volatile-journals.conf ]] && echo done || echo todo ;;
         step_timezone)
             [[ "$(timedatectl show -p Timezone --value 2>/dev/null)" == America/New_York ]] && echo done || echo todo ;;
+        step_gnu_coreutils)
+            # no state on releases without the coreutils-from-* split
+            apt-cache show coreutils-from-gnu >/dev/null 2>&1 || { echo ''; return; }
+            if dpkg-query -W -f'${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed' \
+               && [[ -f /etc/apt/preferences.d/99-disable-uutils ]]; then echo done; else echo todo; fi ;;
         step_swapoff)
             # done = nothing swapped in now, and no fstab entry that could
             # bring swap back at boot: uncommented, type swap, and a source
@@ -526,6 +558,7 @@ STEPS=(
     '14|step_journals|Volatile journals (RAM only, saves rootfs writes)|'
     '15|step_timezone|Set the time zone to US Eastern|'
     '16|step_swapoff|Disable swap (swapoff, fstab, removes /swap.img)|'
+    '17|step_gnu_coreutils|Swap uutils coreutils for GNU + pin uutils out|'
 )
 
 invoke_step () {
