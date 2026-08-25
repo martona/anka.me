@@ -638,7 +638,7 @@ fi
 
 while true; do
     echo
-    printf '  %sprovision%s - linux box setup steps%s\n' "$C_GRN" "$C_GRY" "$C_OFF"
+    printf '  %sprovision%s - linux setup 202608251146 %s\n' "$C_GRN" "$C_GRY" "$C_OFF"
     printf '  %s-----------------------------------------------%s\n' "$C_GRY" "$C_OFF"
     for s in "${STEPS[@]}"; do
         IFS='|' read -r key fn title tag <<<"$s"
