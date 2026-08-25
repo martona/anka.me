@@ -15,6 +15,11 @@
 
 set -u
 
+# Bump on publish (YYYYMMDDHHMM). Shown in the menu, --all and --help
+# headers, so it is always visible whether the CDN served this version
+# or a stale cache.
+VERSION=202608251154
+
 # ---- pretty, uniform output ------------------------------------------------
 C_GRN=$'\033[32m'; C_BGRN=$'\033[92m'; C_CYN=$'\033[96m'; C_YEL=$'\033[93m'
 C_RED=$'\033[91m'; C_GRY=$'\033[90m'; C_WHT=$'\033[97m'; C_OFF=$'\033[0m'
@@ -64,7 +69,7 @@ for a in "$@"; do
 done
 if [[ -n "$HELP" ]]; then
     echo
-    printf '  %sprovision.sh - menu of Linux box setup steps.%s\n' "$C_WHT" "$C_OFF"
+    printf '  %sprovision.sh - menu of Linux box setup steps (%s).%s\n' "$C_WHT" "$VERSION" "$C_OFF"
     Note 'run with no args for the menu, or --all to run everything unattended.'
     Note '--all skips the interactive steps (atuin, ssh key, yadm, clevis).'
     echo
@@ -621,7 +626,7 @@ invoke_step () {
 
 # ---- run -------------------------------------------------------------------
 if [[ -n "$ALL" ]]; then
-    Section 'Provisioning - running all non-interactive steps'
+    Section "Provisioning ($VERSION) - running all non-interactive steps"
     for s in "${STEPS[@]}"; do
         IFS='|' read -r _key fn _title tag <<<"$s"
         if [[ "$tag" == interactive ]]; then
@@ -638,7 +643,7 @@ fi
 
 while true; do
     echo
-    printf '  %sprovision%s - linux setup 202608251146 %s\n' "$C_GRN" "$C_GRY" "$C_OFF"
+    printf '  %sprovision%s - linux box setup steps (%s)%s\n' "$C_GRN" "$C_GRY" "$VERSION" "$C_OFF"
     printf '  %s-----------------------------------------------%s\n' "$C_GRY" "$C_OFF"
     for s in "${STEPS[@]}"; do
         IFS='|' read -r key fn title tag <<<"$s"
